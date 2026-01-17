@@ -5,3 +5,5 @@ tracker_app/scripts*
 **.vscode
 
 **.zip
+
+test**
