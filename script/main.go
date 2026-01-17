@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/getlantern/systray"
@@ -19,8 +22,22 @@ import (
 	_ "github.com/eiannone/keyboard"
 )
 
+const (
+	httpPort             = "8384"
+	chromeExtensionID    = "YOUR_CHROME_EXTENSION_ID"
+	firefoxExtensionID   = "YOUR_FIREFOX_EXTENSION_ID"
+	allowedOriginChrome  = "chrome-extension://" + chromeExtensionID
+	allowedOriginFirefox = "moz-extension://" + firefoxExtensionID
+)
+
+var (
+	currentTab   TabInfo
+	currentTabMu sync.Mutex
+)
+
 type WindowReading struct {
 	ExePath   string
+	TabName   string
 	Timestamp time.Time
 }
 
@@ -49,8 +66,21 @@ func getFocusedWindowInfo() (WindowReading, error) {
 	parts := strings.Split(exePath, "\\")
 	exeName := parts[len(parts)-1]
 
+	browserNames := []string{"chrome.exe", "firefox.exe"}
+	tabName := ""
+
+	for _, v := range browserNames {
+		if exeName == v {
+			currentTabMu.Lock()
+			tabName = currentTab.Title
+			currentTabMu.Unlock()
+			break
+		}
+	}
+
 	return WindowReading{
 		ExePath:   exeName,
+		TabName:   tabName,
 		Timestamp: time.Now(),
 	}, nil
 }
@@ -58,7 +88,7 @@ func getFocusedWindowInfo() (WindowReading, error) {
 // storeReading persists a window reading
 func storeReading(reading WindowReading) {
 
-	print("Focused: ", reading.ExePath, " at ", reading.Timestamp.Format(time.RFC3339), "\n")
+	print("Focused: ", reading.ExePath, " at ", reading.Timestamp.Format(time.RFC3339), "\n"+reading.TabName+"\n")
 	// create data folder
 	err := os.MkdirAll("data/", 0755)
 	if err != nil {
@@ -175,6 +205,9 @@ func onReady() {
 
 	// Start tracking loop
 	go trackingLoop()
+
+	// Start HTTP server for browser extension
+	go startHTTPServer()
 }
 
 func onExit() {
@@ -201,6 +234,54 @@ func trackingLoop() {
 		}
 		storeReading(reading)
 	}
+}
+
+func startHTTPServer() {
+	http.HandleFunc("/tab", tabHandler)
+	addr := "127.0.0.1:" + httpPort
+	log.Printf("Starting HTTP server on %s", addr)
+	if err := http.ListenAndServe(addr, nil); err != nil {
+		log.Printf("HTTP server error: %v", err)
+	}
+}
+
+func tabHandler(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+
+	// Validate origin
+	if origin != allowedOriginChrome && origin != allowedOriginFirefox {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Set CORS headers
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	// Handle preflight request
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var tabInfo TabInfo
+	if err := json.NewDecoder(r.Body).Decode(&tabInfo); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	currentTabMu.Lock()
+	currentTab = tabInfo
+	currentTabMu.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"ok"}`))
 }
 
 // TabInfo represents the data received from the browser extension
