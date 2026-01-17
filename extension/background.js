@@ -1,21 +1,8 @@
 const api = typeof browser !== "undefined" ? browser : chrome;
-const HOST_NAME = "com.example.tabhost";
+const API_URL = "http://127.0.0.1:8384/tab";
 
-let port = null;
 let lastKey = null;
 let timer = null;
-
-function connect() {
-  if (port) return;
-
-  port = api.runtime.connectNative(HOST_NAME);
-
-  port.onDisconnect.addListener(() => {
-    console.log("Native host disconnected");
-    port = null;
-    setTimeout(connect, 1000);
-  });
-}
 
 function scheduleSend() {
   clearTimeout(timer);
@@ -24,8 +11,6 @@ function scheduleSend() {
 
 async function sendActiveTab() {
   try {
-    connect();
-
     const tabs = await api.tabs.query({ active: true, currentWindow: true });
     const tab = tabs[0];
     if (!tab || !tab.url) return;
@@ -41,8 +26,13 @@ async function sendActiveTab() {
     if (key === lastKey) return;
     lastKey = key;
 
-    port.postMessage(payload);
-    console.log("Sent to native app:", payload);
+    await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    console.log("Sent to tracker:", payload);
   } catch (e) {
     console.debug("send error:", e);
   }
@@ -54,4 +44,5 @@ api.tabs.onUpdated.addListener((_, changeInfo) => {
 });
 api.windows.onFocusChanged.addListener(scheduleSend);
 
-connect();
+// Send initial tab on load
+scheduleSend();
