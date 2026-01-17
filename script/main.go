@@ -4,8 +4,9 @@ import (
 	_ "embed"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,53 +237,165 @@ func trackingLoop() {
 	}
 }
 
-func startHTTPServer() {
-	http.HandleFunc("/tab", tabHandler)
-	addr := "127.0.0.1:" + httpPort
-	log.Printf("Starting HTTP server on %s", addr)
-	if err := http.ListenAndServe(addr, nil); err != nil {
-		log.Printf("HTTP server error: %v", err)
+// TabInfo represents the data received from the browser extension
+type TabInfo struct {
+	TabID int64  `json:"tabId"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
+	TS    int64  `json:"ts"`
+}
+
+// NativeMessage is the structure for sending messages back to the extension
+type NativeMessage struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+func main() {
+	// Set up logging to a file (can't use stdout - that's for native messaging)
+	logFile, err := os.OpenFile("/tmp/tabhost.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		// If we can't open log file, fail silently
+		return
+	}
+	defer logFile.Close()
+	log.SetOutput(logFile)
+
+	log.Println("Tab tracker native host started")
+
+	// Read messages from stdin (sent by the browser extension)
+	for {
+		msg, err := readMessage(os.Stdin)
+		if err != nil {
+			if err == io.EOF {
+				log.Println("Extension disconnected (EOF)")
+				break
+			}
+			log.Printf("Error reading message: %v\n", err)
+			continue
+		}
+
+		// Parse the JSON message
+		var tabInfo TabInfo
+		if err := json.Unmarshal(msg, &tabInfo); err != nil {
+			log.Printf("Error parsing JSON: %v\n", err)
+			sendError(fmt.Sprintf("Invalid JSON: %v", err))
+			continue
+		}
+
+		// Process the tab info (this is where you'd add your custom logic)
+		handleTabInfo(tabInfo)
+
 	}
 }
 
-func tabHandler(w http.ResponseWriter, r *http.Request) {
-	origin := r.Header.Get("Origin")
+// 		// Optionally send a response back to the extension
+// 		sendResponse(NativeMessage{Status: "ok"})
+// 	}
 
-	// Validate origin
-	if origin != allowedOriginChrome && origin != allowedOriginFirefox {
-		http.Error(w, "Forbidden", http.StatusForbidden)
-		log.Printf("Wrong origin: %v", origin)
-		return
-	}
+// 	log.Println("Tab tracker native host stopped")
+// }
 
-	print("Received tab info from origin: ", origin, "\n")
+// // readMessage reads a single message from the extension using native messaging protocol
+// // Messages are length-prefixed: 4 bytes (uint32 little-endian) followed by the message
+// func readMessage(r io.Reader) ([]byte, error) {
+// 	// Read the 4-byte message length prefix
+// 	var length uint32
+// 	if err := binary.Read(r, binary.LittleEndian, &length); err != nil {
+// 		return nil, err
+// 	}
 
-	// Set CORS headers
-	w.Header().Set("Access-Control-Allow-Origin", origin)
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+// 	// Sanity check: prevent reading massive messages
+// 	if length > 1024*1024 { // 1MB limit
+// 		return nil, fmt.Errorf("message too large: %d bytes", length)
+// 	}
 
-	// Handle preflight request
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
+// 	// Read the actual message
+// 	msg := make([]byte, length)
+// 	if _, err := io.ReadFull(r, msg); err != nil {
+// 		return nil, err
+// 	}
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// 	return msg, nil
+// }
 
-	var tabInfo TabInfo
-	if err := json.NewDecoder(r.Body).Decode(&tabInfo); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
+// // writeMessage sends a message to the extension using native messaging protocol
+// func writeMessage(w io.Writer, msg []byte) error {
+// 	// Write the 4-byte length prefix
+// 	length := uint32(len(msg))
+// 	if err := binary.Write(w, binary.LittleEndian, length); err != nil {
+// 		return err
+// 	}
 
-	currentTabMu.Lock()
-	currentTab = tabInfo
-	currentTabMu.Unlock()
+// 	// Write the actual message
+// 	if _, err := w.Write(msg); err != nil {
+// 		return err
+// 	}
 
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ok"}`))
-}
+// 	return nil
+// }
+
+// // handleTabInfo processes the received tab information
+// // Customize this function with your own logic
+// func handleTabInfo(info TabInfo) {
+// 	timestamp := time.Unix(info.TS/1000, (info.TS%1000)*1000000)
+
+// 	log.Printf("Tab Info Received:")
+// 	log.Printf("  Tab ID: %d", info.TabID)
+// 	log.Printf("  Title:  %s", info.Title)
+// 	log.Printf("  URL:    %s", info.URL)
+// 	log.Printf("  Time:   %s", timestamp.Format("2006-01-02 15:04:05"))
+// 	log.Println()
+
+// 	// Example: Save to a file
+// 	saveToFile(info)
+
+// 	// Example: Send to a database, API, etc.
+// 	// db.Save(info)
+// 	// api.Post("/tabs", info)
+// }
+
+// // saveToFile appends tab info to a CSV file
+// func saveToFile(info TabInfo) {
+// 	f, err := os.OpenFile("/tmp/tab_history.csv", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+// 	if err != nil {
+// 		log.Printf("Error opening file: %v\n", err)
+// 		return
+// 	}
+// 	defer f.Close()
+
+// 	// Check if file is empty (needs header)
+// 	stat, _ := f.Stat()
+// 	if stat.Size() == 0 {
+// 		f.WriteString("timestamp,tab_id,title,url\n")
+// 	}
+
+// 	timestamp := time.Unix(info.TS/1000, 0).Format("2006-01-02 15:04:05")
+// 	// Escape commas and quotes in CSV
+// 	title := fmt.Sprintf("\"%s\"", info.Title)
+// 	url := fmt.Sprintf("\"%s\"", info.URL)
+
+// 	line := fmt.Sprintf("%s,%d,%s,%s\n", timestamp, info.TabID, title, url)
+// 	f.WriteString(line)
+// }
+
+// // sendResponse sends a message back to the extension
+// func sendResponse(msg NativeMessage) {
+// 	data, err := json.Marshal(msg)
+// 	if err != nil {
+// 		log.Printf("Error marshaling response: %v\n", err)
+// 		return
+// 	}
+
+// 	if err := writeMessage(os.Stdout, data); err != nil {
+// 		log.Printf("Error writing response: %v\n", err)
+// 	}
+// }
+
+// // sendError sends an error message back to the extension
+// func sendError(errMsg string) {
+// 	sendResponse(NativeMessage{
+// 		Status: "error",
+// 		Error:  errMsg,
+// 	})
+// }
