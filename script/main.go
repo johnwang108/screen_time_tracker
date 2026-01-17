@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -27,8 +28,9 @@ import (
 var iconBytes []byte
 
 const (
-	httpPort             = "8384"
-	chromeExtensionID    = "YOUR_CHROME_EXTENSION_ID"
+	httpPort          = "8384"
+	chromeExtensionID = "YOUR_CHROME_EXTENSION_ID"
+	// firefoxExtensionID   = "@jwtabtracker_local"
 	firefoxExtensionID   = "583a7b7a-defb-4431-8771-cee0ca64931a"
 	allowedOriginChrome  = "chrome-extension://" + chromeExtensionID
 	allowedOriginFirefox = "moz-extension://" + firefoxExtensionID
@@ -135,6 +137,53 @@ func storeReading(reading WindowReading) {
 	}
 
 	writer.Write([]string{reading.ExePath, reading.Timestamp.Format(time.RFC3339), reading.TabName, reading.TabUrl})
+}
+
+// calculateTimeSpent reads the CSV file for the given date and returns
+// the time spent (in minutes) with each application focused.
+func calculateTimeSpent(date int) (map[string]float64, error) {
+	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
+	data_file_path := filepath.Join(data_dir, fmt.Sprintf("%d.csv", date))
+
+	f, err := os.Open(data_file_path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(f)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+
+	// skip header row, need at least 2 data rows to calculate duration
+	if len(records) < 3 {
+		return map[string]float64{}, nil
+	}
+
+	result := make(map[string]float64)
+
+	// iterate through consecutive pairs of readings
+	for i := 0; i < len(records)-1; i++ {
+		exePath := records[i][0]
+		if exePath == "Off" {
+			continue
+		}
+		currentTime, err := time.Parse(time.RFC3339, records[i][1])
+		if err != nil {
+			continue
+		}
+		nextTime, err := time.Parse(time.RFC3339, records[i+1][1])
+		if err != nil {
+			continue
+		}
+
+		for duration := nextTime.Sub(currentTime); duration.Seconds() <= 15; { // if longer than 15 seconds, likely computer was off or asleep
+			result[exePath] += duration.Minutes()
+		}
+	}
+	return result, nil
 }
 
 func main() {
