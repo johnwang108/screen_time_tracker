@@ -1,7 +1,12 @@
 claude*
 script/data*
+script/tracker_data*
 script/myapp.exe
 tracker_app/scripts*
 **.vscode
 
 **.zip
+
+test**
+
+script/tracker.exe
