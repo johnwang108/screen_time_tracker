@@ -1,12 +1,14 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +23,9 @@ import (
 
 	_ "github.com/eiannone/keyboard"
 )
+
+//go:embed timer.ico
+var iconBytes []byte
 
 const (
 	httpPort          = "8384"
@@ -101,23 +106,24 @@ func getFocusedWindowInfo() (WindowReading, error) {
 
 // storeReading persists a window reading
 func storeReading(reading WindowReading) {
-	// create data folder
-	err := os.MkdirAll("data/", 0755)
+	// create data folder in AppData/Local
+	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
+	err := os.MkdirAll(data_dir, 0755)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// create or append to file named by date
 	today := time.Now().Format("20060102")
-	filepath := "data/" + today + ".csv"
+	data_file_path := filepath.Join(data_dir, today+".csv")
 
 	// check if file exists to determine if we need headers
 	isNew := false
-	if _, err := os.Stat(filepath); os.IsNotExist(err) {
+	if _, err := os.Stat(data_file_path); os.IsNotExist(err) {
 		isNew = true
 	}
 
-	f, err := os.OpenFile(filepath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(data_file_path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -137,9 +143,10 @@ func storeReading(reading WindowReading) {
 // calculateTimeSpent reads the CSV file for the given date and returns
 // the time spent (in minutes) with each application focused.
 func calculateTimeSpent(date int) (map[string]float64, error) {
-	filepath := fmt.Sprintf("data/%d.csv", date)
+	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
+	data_file_path := filepath.Join(data_dir, fmt.Sprintf("%d.csv", date))
 
-	f, err := os.Open(filepath)
+	f, err := os.Open(data_file_path)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +184,6 @@ func calculateTimeSpent(date int) (map[string]float64, error) {
 			result[exePath] += duration.Minutes()
 		}
 	}
-
 	return result, nil
 }
 
@@ -186,7 +192,7 @@ func main() {
 }
 
 func onReady() {
-	// Simple 16x16 red square ICO as placeholder
+	systray.SetIcon(iconBytes)
 	systray.SetTitle("Tracker")
 	systray.SetTooltip("Window Tracker")
 
