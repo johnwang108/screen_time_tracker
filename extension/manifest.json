@@ -5,5 +5,15 @@
   "type": "stdio",
   "allowed_extensions": [
     "tabtracker@example.com"
-  ]
+  ],
+  "manifest_version":3,
+  "version": "0.1",
+  "browser_specific_settings": {
+        "gecko": {
+        "id": "@jwtabtracker_local",
+        "data_collection_permissions": {
+            "required": ["searchTerms", "browsingActivity"]
+        }
+        }
+    }
 }
