@@ -2,9 +2,7 @@ package main
 
 import (
 	"encoding/csv"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"strings"
@@ -213,49 +211,46 @@ type TabInfo struct {
 	TS    int64  `json:"ts"`
 }
 
-// NativeMessage is the structure for sending messages back to the extension
-type NativeMessage struct {
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
-}
+// // NativeMessage is the structure for sending messages back to the extension
+// type NativeMessage struct {
+// 	Status string `json:"status"`
+// 	Error  string `json:"error,omitempty"`
+// }
 
-func main() {
-	// Set up logging to a file (can't use stdout - that's for native messaging)
-	logFile, err := os.OpenFile("/tmp/tabhost.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		// If we can't open log file, fail silently
-		return
-	}
-	defer logFile.Close()
-	log.SetOutput(logFile)
+// func main() {
+// 	// Set up logging to a file (can't use stdout - that's for native messaging)
+// 	logFile, err := os.OpenFile("/tmp/tabhost.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+// 	if err != nil {
+// 		// If we can't open log file, fail silently
+// 		return
+// 	}
+// 	defer logFile.Close()
+// 	log.SetOutput(logFile)
 
-	log.Println("Tab tracker native host started")
+// 	log.Println("Tab tracker native host started")
 
-	// Read messages from stdin (sent by the browser extension)
-	for {
-		msg, err := readMessage(os.Stdin)
-		if err != nil {
-			if err == io.EOF {
-				log.Println("Extension disconnected (EOF)")
-				break
-			}
-			log.Printf("Error reading message: %v\n", err)
-			continue
-		}
+// 	// Read messages from stdin (sent by the browser extension)
+// 	for {
+// 		msg, err := readMessage(os.Stdin)
+// 		if err != nil {
+// 			if err == io.EOF {
+// 				log.Println("Extension disconnected (EOF)")
+// 				break
+// 			}
+// 			log.Printf("Error reading message: %v\n", err)
+// 			continue
+// 		}
 
-		// Parse the JSON message
-		var tabInfo TabInfo
-		if err := json.Unmarshal(msg, &tabInfo); err != nil {
-			log.Printf("Error parsing JSON: %v\n", err)
-			sendError(fmt.Sprintf("Invalid JSON: %v", err))
-			continue
-		}
+// 		// Parse the JSON message
+// 		var tabInfo TabInfo
+// 		if err := json.Unmarshal(msg, &tabInfo); err != nil {
+// 			log.Printf("Error parsing JSON: %v\n", err)
+// 			sendError(fmt.Sprintf("Invalid JSON: %v", err))
+// 			continue
+// 		}
 
-		// Process the tab info (this is where you'd add your custom logic)
-		handleTabInfo(tabInfo)
-
-	}
-}
+// 		// Process the tab info (this is where you'd add your custom logic)
+// 		handleTabInfo(tabInfo)
 
 // 		// Optionally send a response back to the extension
 // 		sendResponse(NativeMessage{Status: "ok"})
