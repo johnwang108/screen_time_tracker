@@ -1,0 +1,9 @@
+{
+  "name": "com.example.tabhost",
+  "description": "Tab tracker native messaging host",
+  "path": "/usr/local/bin/tabhost",
+  "type": "stdio",
+  "allowed_extensions": [
+    "tabtracker@example.com"
+  ]
+}
