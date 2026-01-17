@@ -1,3 +1,5 @@
 claude*
 script/data*
 script/myapp.exe
+tracker_app/scripts*
+**.vscode
