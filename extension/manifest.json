@@ -1,19 +1,23 @@
 {
-  "name": "com.example.tabhost",
-  "description": "Tab tracker native messaging host",
-  "path": "/usr/local/bin/tabhost",
-  "type": "stdio",
-  "allowed_extensions": [
-    "tabtracker@example.com"
-  ],
-  "manifest_version":3,
-  "version": "0.1",
+  "manifest_version": 3,
+  "name": "Tab Tracker",
+  "version": "0.2",
+  "description": "Tab tracker",
   "browser_specific_settings": {
-        "gecko": {
-        "id": "@jwtabtracker_local",
-        "data_collection_permissions": {
-            "required": ["searchTerms", "browsingActivity"]
-        }
-        }
+    "gecko": {
+      "id": "@jwtabtracker_local",
+      "data_collection_permissions": {
+        "required": ["searchTerms", "browsingActivity"]
+      }
     }
+  },
+  "permissions": [
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8384/*"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  }
 }
