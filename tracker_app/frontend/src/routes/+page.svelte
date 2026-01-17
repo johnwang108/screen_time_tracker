@@ -11,12 +11,17 @@
 		{ label: 'Sat', value: 180, average: 200 },
 		{ label: 'Sun', value: 150, average: 200 }
 	];
+
+	const dailyAvg = weekData.reduce((sum, d) => sum + d.value, 0) / weekData.length;
+	const dailyAvgHours = (dailyAvg / 60).toFixed(1);
 </script>
 
 <div class="container">
 	<div class="left-panel">
-		<h2>Weekly Screen Time</h2>
-		<BarChart data={weekData} />
+		<div class="chart-wrapper">
+			<h2>Daily Average: {dailyAvgHours}h</h2>
+			<BarChart data={weekData} weeklyAvg={dailyAvg} />
+		</div>
 	</div>
 	<div class="right-panel">
 		<!-- Reserved for future content -->
@@ -31,6 +36,9 @@
 		overflow: hidden;
 		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
 		background: #f9fafb;
+
+		--font-size-heading: 1.25rem;
+		--font-size-small: 12px;
 	}
 
 	.container {
@@ -56,9 +64,16 @@
 
 	h2 {
 		margin: 0 0 1rem 0;
-		font-size: 1.25rem;
+		font-size: var(--font-size-heading);
 		font-weight: 600;
 		color: #111827;
 		flex-shrink: 0;
+		text-align: center;
+	}
+
+	.chart-wrapper {
+		height: 400px;
+		display: flex;
+		flex-direction: column;
 	}
 </style>
