@@ -2,9 +2,14 @@
 
 ## About
 
-Wails SvelteKit Template with less, Prettier and ESLint.
+This is a Wails screen-time tracking app.
 
-The frontend is generated with `npx sv create` and manually added less.
+TODO:
+- Get total focused screen time for each day.
+- For each day, get the breakdown of which apps / websites the screen time was spent on.
+- Get screen time stats for past weeks, both per-day and total. Can be grouped by entire week, or just select weekday/weekend.
+- For an app or category, get screen time spent on that category historically, in both per-day and total stats. Can be grouped by month, week, year, weekend, weekday, etc.
+
 
 ## Live Development
 
