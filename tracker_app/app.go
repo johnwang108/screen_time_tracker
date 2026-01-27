@@ -58,7 +58,19 @@ func (a *App) startup(ctx context.Context) {
 
 // domReady is called after front-end resources have been loaded
 func (a App) domReady(ctx context.Context) {
+	start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.Now().Location())
+	end := time.Now()
 
+	var dates []int // list of date_ids since 20200101
+
+	for d := start; d.Before(end); d = d.AddDate(0, 0, 1) {
+		date_id := d.Year()*10000 + int(d.Month())*100 + d.Day()
+		dates = append(dates, date_id)
+	}
+
+	for _, date_id := range dates {
+		a.populate_date(date_id)
+	}
 }
 
 // beforeClose is called when the application is about to quit,
@@ -111,21 +123,67 @@ func (a *App) populate_categories() error {
 }
 
 // populate_records takes in the raw data from the CSV, header and all, and populates the App's records slice.
+// CSV format: name, timestamp, tabName, tabUrl, hadActivity
+// Consolidates consecutive identical records and discards periods with 2+ minutes of continuous inactivity
 func (a *App) populate_records(records [][]string) error {
-	if len(records) < 3 {
-		return nil // do nothing if not enough data
+	if len(records) < 2 {
+		return nil // need at least header + 1 data row
 	}
 
-	// iterate through consecutive pairs of readings
-	for i := 0; i < len(records)-1; i++ {
-		exePath := records[i][0]
-		name := records[i][1]
-		url := records[i][2]
+	// Track accumulated record state
+	var currentExePath, currentUrl, currentName string
+	var currentDateId int
+	var accumulatedDuration int = 0
+	var inactiveStreak int = 0
 
-		if exePath == "Off" { // app was off or asleep: don't count the time from this to next
+	// Helper to check if two records represent the same activity
+	isSameActivity := func(exePath1, url1, name1, exePath2, url2, name2 string) bool {
+		return exePath1 == exePath2 && url1 == url2 && name1 == name2
+	}
+
+	// Helper to flush accumulated record
+	flushRecord := func() {
+		if accumulatedDuration > 0 {
+			record := Record{
+				duration:  accumulatedDuration,
+				exe_path:  currentExePath,
+				url:       currentUrl,
+				name:      currentName,
+				date_id:   currentDateId,
+				date_info: a.enrich_date(currentDateId),
+				category:  a.categorize(currentExePath, currentUrl),
+			}
+			a.records = append(a.records, record)
+		}
+		// Reset all state
+		currentExePath = ""
+		currentUrl = ""
+		currentName = ""
+		currentDateId = 0
+		accumulatedDuration = 0
+		inactiveStreak = 0
+	}
+
+	// Iterate through consecutive pairs of readings (skip header row at index 0)
+	for i := 1; i < len(records)-1; i++ {
+		if len(records[i]) < 5 {
+			continue // skip malformed rows
+		}
+
+		exePath := records[i][0]
+		timestamp := records[i][1]
+		tabName := records[i][2]
+		tabUrl := records[i][3]
+		hadActivityStr := records[i][4]
+
+		// Skip if app was off or asleep
+		if exePath == "Off" {
+			flushRecord()
 			continue
 		}
-		currentTime, err := time.Parse(time.RFC3339, records[i][1])
+
+		// Parse timestamps
+		currentTime, err := time.Parse(time.RFC3339, timestamp)
 		if err != nil {
 			continue
 		}
@@ -133,24 +191,69 @@ func (a *App) populate_records(records [][]string) error {
 		if err != nil {
 			continue
 		}
+
+		// Calculate duration
+		duration := int(nextTime.Sub(currentTime).Seconds())
+		if duration > 15 {
+			// Likely computer was off or asleep
+			flushRecord()
+			continue
+		}
+
+		// Parse hadActivity
+		hadActivity := hadActivityStr == "true"
 		date_id := currentTime.Year()*10000 + int(currentTime.Month())*100 + currentTime.Day()
 
-		for duration := nextTime.Sub(currentTime); duration.Seconds() <= 15; { // if longer than 15 seconds, likely computer was off or asleep
-			// if this code block is entered, this is a valid record
-			record := Record{
-				duration: int(duration.Seconds()),
-
-				exe_path: exePath,
-				url:      url,
-				name:     name,
-
-				date_id:   date_id,
-				date_info: a.enrich_date(date_id),
-				category:  a.categorize(exePath, url),
+		if !hadActivity {
+			// Inactive period
+			if currentExePath != "" && isSameActivity(currentExePath, currentUrl, currentName, exePath, tabUrl, tabName) {
+				// Same activity - add to inactive streak
+				inactiveStreak += duration
+				// If inactive streak reaches 2 minutes, flush and reset (don't include the inactive time)
+				if inactiveStreak >= 120 {
+					flushRecord()
+				}
+			} else {
+				// Different activity or not started - flush previous if exists, don't start new
+				if currentExePath != "" {
+					flushRecord()
+				}
+				// Don't count this inactive time for the different/new activity
 			}
-			a.records = append(a.records, record)
+		} else {
+			// Active period
+			if currentExePath == "" {
+				// Start new record
+				currentExePath = exePath
+				currentUrl = tabUrl
+				currentName = tabName
+				currentDateId = date_id
+				accumulatedDuration = duration
+				inactiveStreak = 0
+			} else if isSameActivity(currentExePath, currentUrl, currentName, exePath, tabUrl, tabName) {
+				// Same activity - add inactive streak (if < 2 min) + current duration
+				if inactiveStreak < 120 {
+					accumulatedDuration += inactiveStreak + duration
+				} else {
+					// Inactive streak was >= 2 min, so we already flushed
+					// This shouldn't happen due to the flush above, but handle it
+					accumulatedDuration = duration
+				}
+				inactiveStreak = 0
+			} else {
+				// Different activity - flush previous and start new
+				flushRecord()
+				currentExePath = exePath
+				currentUrl = tabUrl
+				currentName = tabName
+				currentDateId = date_id
+				accumulatedDuration = duration
+				inactiveStreak = 0
+			}
 		}
 	}
+	// Flush any remaining accumulated record
+	flushRecord()
 	return nil
 }
 
