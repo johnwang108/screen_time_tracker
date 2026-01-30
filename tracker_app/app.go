@@ -30,6 +30,28 @@ type DateInfo struct {
 	IsWeekend       bool
 }
 
+// Grouper represents a dimension to group records by
+type Grouper string
+
+const (
+	GroupByDate      Grouper = "date"
+	GroupByWeek      Grouper = "week"
+	GroupByMonth     Grouper = "month"
+	GroupByYear      Grouper = "year"
+	GroupByDayOfWeek Grouper = "day_of_week"
+	GroupByIsWeekend Grouper = "is_weekend"
+	GroupByCategory  Grouper = "category"
+	GroupByURL       Grouper = "url"
+	GroupByExePath   Grouper = "exe_path"
+	GroupByName      Grouper = "name"
+)
+
+// Aggregation represents aggregated time across multiple records
+type Aggregation struct {
+	Groupers map[string]interface{} `json:"groupers"`
+	Duration int                    `json:"duration"` // total duration in seconds
+}
+
 // App struct
 type App struct {
 	ctx                context.Context
@@ -57,13 +79,13 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // domReady is called after front-end resources have been loaded
-func (a App) domReady(ctx context.Context) {
+func (a *App) domReady(ctx context.Context) {
 	start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.Now().Location())
 	end := time.Now()
 
 	var dates []int // list of date_ids since 20200101
 
-	for d := start; d.Before(end); d = d.AddDate(0, 0, 1) {
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
 		date_id := d.Year()*10000 + int(d.Month())*100 + d.Day()
 		dates = append(dates, date_id)
 	}
@@ -273,7 +295,6 @@ func (a *App) populate_date(date int) error {
 	if err != nil {
 		return err
 	}
-
 	a.populate_records(records)
 	return nil
 }
@@ -330,5 +351,119 @@ func (a *App) enrich_date(date_id int) DateInfo {
 		WeekOfYear:      weekOfYear,
 		IsMarketHoliday: isMarketHoliday,
 		IsWeekend:       isWeekend,
+	}
+}
+
+// GetAggregations aggregates records based on specified groupers and filters
+func (a *App) GetAggregations(grouperNames []string, filters map[string]string) []Aggregation {
+	// Map to accumulate durations: aggregation key -> duration
+	aggregationMap := make(map[string]int)
+	// Map to store grouper values: aggregation key -> grouper values
+	grouperValuesMap := make(map[string]map[string]interface{})
+
+	// Process each record
+	for _, record := range a.records {
+		// Check if record matches filters
+		if !a.matchesFilters(record, filters) {
+			continue
+		}
+
+		// Extract grouper values for this record
+		grouperValues := make(map[string]interface{})
+		keyParts := []string{}
+
+		for _, grouperName := range grouperNames {
+			value := a.extractGrouperValue(record, Grouper(grouperName))
+			grouperValues[grouperName] = value
+			keyParts = append(keyParts, fmt.Sprintf("%v", value))
+		}
+
+		// Create unique key for this combination of grouper values
+		key := strings.Join(keyParts, "|")
+
+		// Accumulate duration
+		aggregationMap[key] += record.duration
+		grouperValuesMap[key] = grouperValues
+	}
+
+	// Convert map to slice of Aggregation structs
+	aggregations := []Aggregation{}
+	for key, duration := range aggregationMap {
+		aggregations = append(aggregations, Aggregation{
+			Groupers: grouperValuesMap[key],
+			Duration: duration,
+		})
+	}
+
+	return aggregations
+}
+
+// matchesFilters checks if a record matches all specified filters
+func (a *App) matchesFilters(record Record, filters map[string]string) bool {
+	for key, value := range filters {
+		switch key {
+		case "start_date":
+			startDate := 0
+			fmt.Sscanf(value, "%d", &startDate)
+			if record.date_id < startDate {
+				return false
+			}
+		case "end_date":
+			endDate := 0
+			fmt.Sscanf(value, "%d", &endDate)
+			if record.date_id > endDate {
+				return false
+			}
+		case "category":
+			if record.category != value {
+				return false
+			}
+		case "url":
+			if !strings.Contains(record.url, value) {
+				return false
+			}
+		case "exe_path":
+			if record.exe_path != value {
+				return false
+			}
+		case "name":
+			if record.name != value {
+				return false
+			}
+		case "is_weekend":
+			isWeekend := value == "true"
+			if record.date_info.IsWeekend != isWeekend {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// extractGrouperValue extracts the value for a given grouper from a record
+func (a *App) extractGrouperValue(record Record, grouper Grouper) interface{} {
+	switch grouper {
+	case GroupByDate:
+		return record.date_id
+	case GroupByWeek:
+		return record.date_info.WeekOfYear
+	case GroupByMonth:
+		return (record.date_id / 100) % 100 // extract month from YYYYMMDD
+	case GroupByYear:
+		return record.date_id / 10000 // extract year from YYYYMMDD
+	case GroupByDayOfWeek:
+		return record.date_info.DayOfWeek
+	case GroupByIsWeekend:
+		return record.date_info.IsWeekend
+	case GroupByCategory:
+		return record.category
+	case GroupByURL:
+		return record.url
+	case GroupByExePath:
+		return record.exe_path
+	case GroupByName:
+		return record.name
+	default:
+		return nil
 	}
 }

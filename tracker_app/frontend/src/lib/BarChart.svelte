@@ -54,6 +54,17 @@
 
 <style>
   .chart-container {
+    /* CSS Custom Properties */
+    --chart-gap: 1rem;
+    --chart-padding: 1rem;
+    --bar-gap: 4px;
+
+    --color-primary: #3b82f6;
+    --color-average: #e5e7eb;
+    --color-avg-line: #f97316;
+    --color-border: #e5e7eb;
+    --color-text-secondary: #6b7280;
+
     width: 100%;
     height: 100%;
     display: flex;
@@ -62,52 +73,56 @@
 
   .chart-area {
     flex: 1;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: auto 1fr;  /* Y-axis auto-sizes, chart takes rest */
+    grid-template-rows: 1fr auto;     /* Bars take space, labels at bottom */
+    column-gap: var(--chart-gap);
+    padding: var(--chart-padding) 0;  /* Padding moved here - outside the chart space */
     min-height: 0;
   }
 
   .bars-row {
-    flex: 1;
-    display: flex;
-    min-height: 0;
+    /* Remove from grid flow - children become direct grid items */
+    display: contents;
   }
 
   .y-axis {
+    grid-column: 1;
+    grid-row: 1;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    padding: 1rem 0;
+    /* No padding - matches chart space exactly */
   }
 
   .y-tick {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 0.25rem;
   }
 
   .y-label {
     font-size: var(--font-size-small);
-    color: #6b7280;
+    color: var(--color-text-secondary);
     text-align: right;
-    min-width: 32px;
   }
 
   .tick-mark {
     width: 6px;
     height: 1px;
-    background: #d1d5db;
+    background: var(--color-border);
   }
 
   .bars-area {
-    flex: 1;
+    grid-column: 2;
+    grid-row: 1;
     display: flex;
     align-items: flex-end;
-    gap: 1rem;
+    gap: var(--chart-gap);
     position: relative;
-    padding: 1rem 0;
-    border-left: 1px solid #e5e7eb;
-    padding-left: 1rem;
+    padding-left: var(--chart-padding);  /* Only left padding for spacing after border */
+    border-left: 1px solid var(--color-border);
+    min-height: 0;
   }
 
   .avg-line-wrapper {
@@ -116,6 +131,7 @@
     right: 0;
     bottom: 0;
     pointer-events: none;
+    /* Now references the same height as bars (no padding offset) */
   }
 
   .avg-line {
@@ -123,7 +139,7 @@
     top: 0;
     left: 0;
     right: 0;
-    border-top: 2px dotted #f97316;
+    border-top: 2px dotted var(--color-avg-line);
     display: flex;
     justify-content: flex-end;
     align-items: center;
@@ -131,9 +147,9 @@
 
   .avg-label {
     font-size: var(--font-size-small);
-    color: #f97316;
+    color: var(--color-avg-line);
     background: #ffffff;
-    padding: 0 4px;
+    padding: 0 0.25rem;
     transform: translateY(-50%);
   }
 
@@ -143,22 +159,22 @@
     display: flex;
     align-items: flex-end;
     justify-content: center;
-    gap: 4px;
+    gap: var(--bar-gap);
   }
 
   .bar {
     width: 40%;
-    max-width: 32px;
+    max-width: 2rem;
     border-radius: 4px 4px 0 0;
     transition: opacity 0.15s ease;
   }
 
   .bar-value {
-    background: #3b82f6;
+    background: var(--color-primary);
   }
 
   .bar-average {
-    background: #e5e7eb;
+    background: var(--color-average);
   }
 
   .bar-column:hover .bar {
@@ -166,28 +182,30 @@
   }
 
   .labels {
+    /* Auto-aligns with bars - same grid column */
+    grid-column: 2;
+    grid-row: 2;
     display: flex;
-    gap: 1rem;
-    padding-top: 0.5rem;
-    margin-left: 50px;
-    padding-left: 1rem;
+    gap: var(--chart-gap);
+    margin-top: 0.5rem;
+    padding-left: var(--chart-padding);  /* Matches bars-area left padding */
   }
 
   .label {
     flex: 1;
     text-align: center;
     font-size: var(--font-size-small);
-    color: #6b7280;
+    color: var(--color-text-secondary);
   }
 
   .legend {
     display: flex;
     gap: 1.5rem;
     justify-content: center;
-    padding-top: 1rem;
-    border-top: 1px solid #e5e7eb;
+    padding-top: var(--chart-padding);
+    border-top: 1px solid var(--color-border);
     font-size: var(--font-size-small);
-    color: #6b7280;
+    color: var(--color-text-secondary);
   }
 
   .legend-item {
@@ -197,16 +215,16 @@
   }
 
   .legend-box {
-    width: 12px;
-    height: 12px;
+    width: 0.75rem;
+    height: 0.75rem;
     border-radius: 2px;
   }
 
   .legend-value {
-    background: #3b82f6;
+    background: var(--color-primary);
   }
 
   .legend-avg {
-    background: #e5e7eb;
+    background: var(--color-average);
   }
 </style>
