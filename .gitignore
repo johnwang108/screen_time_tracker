@@ -10,3 +10,6 @@ tracker_app/scripts*
 test**
 
 script/tracker.exe
+**test.go
+
+**claude**

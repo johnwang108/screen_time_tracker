@@ -30,8 +30,12 @@ const (
 	httpPort          = "8384"
 	chromeExtensionID = "YOUR_CHROME_EXTENSION_ID"
 	// firefoxExtensionID   = "@jwtabtracker_local"
+<<<<<<< HEAD
 	firefoxExtensionID = "583a7b7a-defb-4431-8771-cee0ca64931a"
 
+=======
+	firefoxExtensionID   = "583a7b7a-defb-4431-8771-cee0ca64931a"
+>>>>>>> frontend_branch
 	allowedOriginChrome  = "chrome-extension://" + chromeExtensionID
 	allowedOriginFirefox = "moz-extension://" + firefoxExtensionID
 )
@@ -139,6 +143,7 @@ func storeReading(reading WindowReading) {
 	writer.Write([]string{reading.ExePath, reading.Timestamp.Format(time.RFC3339), reading.TabName, reading.TabUrl})
 }
 
+<<<<<<< HEAD
 // // calculateTimeSpent reads the CSV file for the given date and returns
 // // the time spent (in minutes) with each application focused.
 // func calculateTimeSpent(date int) (map[string]float64, error) {
@@ -150,6 +155,19 @@ func storeReading(reading WindowReading) {
 // 		return nil, err
 // 	}
 // 	defer f.Close()
+=======
+// calculateTimeSpent reads the CSV file for the given date and returns
+// the time spent (in minutes) with each application focused.
+func calculateTimeSpent(date int) (map[string]float64, error) {
+	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
+	data_file_path := filepath.Join(data_dir, fmt.Sprintf("%d.csv", date))
+
+	f, err := os.Open(data_file_path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+>>>>>>> frontend_branch
 
 // 	reader := csv.NewReader(f)
 // 	records, err := reader.ReadAll()
@@ -179,12 +197,21 @@ func storeReading(reading WindowReading) {
 // 			continue
 // 		}
 
+<<<<<<< HEAD
 // 		for duration := nextTime.Sub(currentTime); duration.Seconds() <= 15; { // if longer than 15 seconds, likely computer was off or asleep
 // 			result[exePath] += duration.Minutes()
 // 		}
 // 	}
 // 	return result, nil
 // }
+=======
+		for duration := nextTime.Sub(currentTime); duration.Seconds() <= 15; { // if longer than 15 seconds, likely computer was off or asleep
+			result[exePath] += duration.Minutes()
+		}
+	}
+	return result, nil
+}
+>>>>>>> frontend_branch
 
 func main() {
 	systray.Run(onReady, onExit)
@@ -251,12 +278,18 @@ func tabHandler(w http.ResponseWriter, r *http.Request) {
 	// Validate origin
 	if origin != allowedOriginChrome && origin != allowedOriginFirefox {
 		http.Error(w, "Forbidden", http.StatusForbidden)
+<<<<<<< HEAD
 		log.Printf("Wrong origin: %v", origin)
 		return
 	}
 
 	print("Received tab info from origin: ", origin, "\n")
 
+=======
+		return
+	}
+
+>>>>>>> frontend_branch
 	// Set CORS headers
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")

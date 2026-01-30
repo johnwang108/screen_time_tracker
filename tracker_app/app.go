@@ -2,12 +2,63 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 )
+
+// Record
+type Record struct {
+	duration  int // duration in seconds
+	exe_path  string
+	url       string
+	name      string
+	date_id   int
+	date_info DateInfo
+	category  string
+}
+
+// DateInfo holds enriched information about a date
+type DateInfo struct {
+	DayOfWeek       string
+	MonthName       string
+	WeekOfYear      int
+	IsMarketHoliday bool
+	IsWeekend       bool
+}
+
+// Grouper represents a dimension to group records by
+type Grouper string
+
+const (
+	GroupByDate      Grouper = "date"
+	GroupByWeek      Grouper = "week"
+	GroupByMonth     Grouper = "month"
+	GroupByYear      Grouper = "year"
+	GroupByDayOfWeek Grouper = "day_of_week"
+	GroupByIsWeekend Grouper = "is_weekend"
+	GroupByCategory  Grouper = "category"
+	GroupByURL       Grouper = "url"
+	GroupByExePath   Grouper = "exe_path"
+	GroupByName      Grouper = "name"
+)
+
+// Aggregation represents aggregated time across multiple records
+type Aggregation struct {
+	Groupers map[string]interface{} `json:"groupers"`
+	Duration int                    `json:"duration"` // total duration in seconds
+}
 
 // App struct
 type App struct {
-	ctx context.Context
+	ctx                context.Context
+	records            []Record            // loaded records
+	categories         map[string]string   // map of url/exe_path to category
+	reverse_categories map[string][]string // map of category to list of url/exe_paths for easy lookup
+
 }
 
 // NewApp creates a new App application struct
@@ -19,11 +70,29 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	// Perform your setup here
 	a.ctx = ctx
+	a.records = []Record{}
+	a.categories = make(map[string]string)
+	a.reverse_categories = make(map[string][]string)
+
+	// populate categories
+	a.populate_categories()
 }
 
 // domReady is called after front-end resources have been loaded
-func (a App) domReady(ctx context.Context) {
-	// Add your action here
+func (a *App) domReady(ctx context.Context) {
+	start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.Now().Location())
+	end := time.Now()
+
+	var dates []int // list of date_ids since 20200101
+
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		date_id := d.Year()*10000 + int(d.Month())*100 + d.Day()
+		dates = append(dates, date_id)
+	}
+
+	for _, date_id := range dates {
+		a.populate_date(date_id)
+	}
 }
 
 // beforeClose is called when the application is about to quit,
@@ -35,194 +104,366 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 
 // shutdown is called at application termination
 func (a *App) shutdown(ctx context.Context) {
-	// Perform your teardown here
+
 }
 
-// Greet returns a greeting for the given name
-func (a *App) Greet(name string) string {
-	return fmt.Sprintf("Hello %s, It's show time!", name)
+/*
+
+Desired Functionality
+
+- URL -> website base url
+- Categorize function: map app/webstite to category (e.g., Social Media, Work, Entertainment). Pulls from a predefined list or config file.
+- time_on_date function: reads the CSV file for a given date and returns the time spent (in minutes) with each application focused.
+- time_per_category
+*/
+
+func (a *App) populate_categories() error {
+	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
+	data_file_path := filepath.Join(data_dir, "categories.json")
+	f, err := os.OpenFile(data_file_path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// by default, url/exe_path -> category is empty
+	categories := map[string]string{}
+
+	// by default, category -> url/exe_paths is empty. but pre-defined 5 categories
+	reverse_categories := map[string][]string{
+		"Other":         {},
+		"Work":          {},
+		"Productivity":  {},
+		"Entertainment": {},
+		"Games":         {},
+	}
+
+	a.categories = categories
+	a.reverse_categories = reverse_categories
+
+	return nil
 }
 
-// type WindowReading struct {
-// 	ExePath   string
-// 	Timestamp time.Time
-// }
+// populate_records takes in the raw data from the CSV, header and all, and populates the App's records slice.
+// CSV format: name, timestamp, tabName, tabUrl, hadActivity
+// Consolidates consecutive identical records and discards periods with 2+ minutes of continuous inactivity
+func (a *App) populate_records(records [][]string) error {
+	if len(records) < 2 {
+		return nil // need at least header + 1 data row
+	}
 
-// // getFocusedWindowInfo retrieves the exe path of the currently focused window
-// func getFocusedWindowInfo() (WindowReading, error) {
-// 	hwnd := windows.GetForegroundWindow()
+	// Track accumulated record state
+	var currentExePath, currentUrl, currentName string
+	var currentDateId int
+	var accumulatedDuration int = 0
+	var inactiveStreak int = 0
 
-// 	// Get process ID from window handle
-// 	var pid uint32
-// 	_, _ = windows.GetWindowThreadProcessId(hwnd, &pid)
+	// Helper to check if two records represent the same activity
+	isSameActivity := func(exePath1, url1, name1, exePath2, url2, name2 string) bool {
+		return exePath1 == exePath2 && url1 == url2 && name1 == name2
+	}
 
-// 	// Get executable path from PID
-// 	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
-// 	if err != nil {
-// 		return WindowReading{}, err
-// 	}
-// 	defer windows.CloseHandle(handle)
+	// Helper to flush accumulated record
+	flushRecord := func() {
+		if accumulatedDuration > 0 {
+			record := Record{
+				duration:  accumulatedDuration,
+				exe_path:  currentExePath,
+				url:       currentUrl,
+				name:      currentName,
+				date_id:   currentDateId,
+				date_info: a.enrich_date(currentDateId),
+				category:  a.categorize(currentExePath, currentUrl),
+			}
+			a.records = append(a.records, record)
+		}
+		// Reset all state
+		currentExePath = ""
+		currentUrl = ""
+		currentName = ""
+		currentDateId = 0
+		accumulatedDuration = 0
+		inactiveStreak = 0
+	}
 
-// 	var buf [windows.MAX_PATH]uint16
-// 	length := uint32(len(buf))
-// 	err = windows.QueryFullProcessImageName(handle, 0, &buf[0], &length)
-// 	if err != nil {
-// 		return WindowReading{}, err
-// 	}
-// 	exePath := windows.UTF16ToString(buf[:length])
-// 	parts := strings.Split(exePath, "\\")
-// 	exeName := parts[len(parts)-1]
+	// Iterate through consecutive pairs of readings (skip header row at index 0)
+	for i := 1; i < len(records)-1; i++ {
+		if len(records[i]) < 5 {
+			continue // skip malformed rows
+		}
 
-// 	return WindowReading{
-// 		ExePath:   exeName,
-// 		Timestamp: time.Now(),
-// 	}, nil
-// }
+		exePath := records[i][0]
+		timestamp := records[i][1]
+		tabName := records[i][2]
+		tabUrl := records[i][3]
+		hadActivityStr := records[i][4]
 
-// // storeReading persists a window reading
-// func storeReading(reading WindowReading) {
+		// Skip if app was off or asleep
+		if exePath == "Off" {
+			flushRecord()
+			continue
+		}
 
-// 	print("Focused: ", reading.ExePath, " at ", reading.Timestamp.Format(time.RFC3339), "\n")
-// 	// create data folder
-// 	err := os.MkdirAll("data/", 0755)
-// 	if err != nil {
-// 		log.Fatal(err)
-// 	}
+		// Parse timestamps
+		currentTime, err := time.Parse(time.RFC3339, timestamp)
+		if err != nil {
+			continue
+		}
+		nextTime, err := time.Parse(time.RFC3339, records[i+1][1])
+		if err != nil {
+			continue
+		}
 
-// 	// create or append to file named by date
-// 	today := time.Now().Format("20060102")
-// 	filepath := "data/" + today + ".csv"
+		// Calculate duration
+		duration := int(nextTime.Sub(currentTime).Seconds())
+		if duration > 15 {
+			// Likely computer was off or asleep
+			flushRecord()
+			continue
+		}
 
-// 	// check if file exists to determine if we need headers
-// 	isNew := false
-// 	if _, err := os.Stat(filepath); os.IsNotExist(err) {
-// 		isNew = true
-// 	}
+		// Parse hadActivity
+		hadActivity := hadActivityStr == "true"
+		date_id := currentTime.Year()*10000 + int(currentTime.Month())*100 + currentTime.Day()
 
-// 	f, err := os.OpenFile(filepath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-// 	if err != nil {
-// 		log.Fatal(err)
-// 	}
-// 	defer f.Close()
+		if !hadActivity {
+			// Inactive period
+			if currentExePath != "" && isSameActivity(currentExePath, currentUrl, currentName, exePath, tabUrl, tabName) {
+				// Same activity - add to inactive streak
+				inactiveStreak += duration
+				// If inactive streak reaches 2 minutes, flush and reset (don't include the inactive time)
+				if inactiveStreak >= 120 {
+					flushRecord()
+				}
+			} else {
+				// Different activity or not started - flush previous if exists, don't start new
+				if currentExePath != "" {
+					flushRecord()
+				}
+				// Don't count this inactive time for the different/new activity
+			}
+		} else {
+			// Active period
+			if currentExePath == "" {
+				// Start new record
+				currentExePath = exePath
+				currentUrl = tabUrl
+				currentName = tabName
+				currentDateId = date_id
+				accumulatedDuration = duration
+				inactiveStreak = 0
+			} else if isSameActivity(currentExePath, currentUrl, currentName, exePath, tabUrl, tabName) {
+				// Same activity - add inactive streak (if < 2 min) + current duration
+				if inactiveStreak < 120 {
+					accumulatedDuration += inactiveStreak + duration
+				} else {
+					// Inactive streak was >= 2 min, so we already flushed
+					// This shouldn't happen due to the flush above, but handle it
+					accumulatedDuration = duration
+				}
+				inactiveStreak = 0
+			} else {
+				// Different activity - flush previous and start new
+				flushRecord()
+				currentExePath = exePath
+				currentUrl = tabUrl
+				currentName = tabName
+				currentDateId = date_id
+				accumulatedDuration = duration
+				inactiveStreak = 0
+			}
+		}
+	}
+	// Flush any remaining accumulated record
+	flushRecord()
+	return nil
+}
 
-// 	writer := csv.NewWriter(f)
-// 	defer writer.Flush()
+// populate_date reads the CSV file for the given date and populates the records on that date.
+func (a *App) populate_date(date int) error {
+	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
+	data_file_path := filepath.Join(data_dir, fmt.Sprintf("%d.csv", date))
 
-// 	// write header if new file
-// 	if isNew {
-// 		writer.Write([]string{"name", "timestamp"})
-// 	}
+	f, err := os.Open(data_file_path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
-// 	writer.Write([]string{reading.ExePath, reading.Timestamp.Format(time.RFC3339)})
-// }
+	reader := csv.NewReader(f)
+	records, err := reader.ReadAll()
+	if err != nil {
+		return err
+	}
+	a.populate_records(records)
+	return nil
+}
 
-// // calculateTimeSpent reads the CSV file for the given date and returns
-// // the time spent (in minutes) with each application focused.
-// func calculateTimeSpent(date int) (map[string]float64, error) {
-// 	filepath := fmt.Sprintf("data/%d.csv", date)
+// categorize takes in an application name and URL, and returns the category it belongs to, according to the predefined categories.
+// Categorize by url if given, otherwise by exe name.
+// The name is the website name if applicable, otherwise the exe name. The url is self explanatory.
+func (a *App) categorize(exePath string, url string) string {
+	if url != "" { // categorize by url
+		for key, category := range a.categories {
+			if strings.Contains(url, key) {
+				return category
+			}
+		}
+		return "Other"
+	} else { // categorize by exe path
+		if category, exists := a.categories[exePath]; exists {
+			return category
+		}
+	}
+	return "Other"
+}
 
-// 	f, err := os.Open(filepath)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	defer f.Close()
+// enrich_date takes a date_id (YYYYMMDD format) and returns enriched date information
+// including day of week, month name, week of year, market holiday status, and weekend status.
+func (a *App) enrich_date(date_id int) DateInfo {
+	// Extract year, month, and day from date_id
+	year := date_id / 10000
+	month := (date_id / 100) % 100
+	day := date_id % 100
 
-// 	reader := csv.NewReader(f)
-// 	records, err := reader.ReadAll()
-// 	if err != nil {
-// 		return nil, err
-// 	}
+	// Create time.Time object
+	t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
 
-// 	// skip header row, need at least 2 data rows to calculate duration
-// 	if len(records) < 3 {
-// 		return map[string]float64{}, nil
-// 	}
+	// Get day of week
+	weekday := t.Weekday()
+	dayOfWeek := weekday.String()
 
-// 	result := make(map[string]float64)
+	// Get month name
+	monthName := t.Month().String()
 
-// 	// iterate through consecutive pairs of readings
-// 	for i := 0; i < len(records)-1; i++ {
-// 		exePath := records[i][0]
-// 		if exePath == "Off" {
-// 			continue
-// 		}
-// 		currentTime, err := time.Parse(time.RFC3339, records[i][1])
-// 		if err != nil {
-// 			continue
-// 		}
-// 		nextTime, err := time.Parse(time.RFC3339, records[i+1][1])
-// 		if err != nil {
-// 			continue
-// 		}
+	// Get ISO week of year
+	_, weekOfYear := t.ISOWeek()
 
-// 		duration := nextTime.Sub(currentTime)
-// 		result[exePath] += duration.Minutes()
-// 	}
+	// Check if weekend
+	isWeekend := weekday == time.Saturday || weekday == time.Sunday
 
-// 	return result, nil
-// }
+	// Market holiday detection - placeholder for future implementation
+	isMarketHoliday := false
 
-// func main() {
-// 	systray.Run(onReady, onExit)
-// }
+	return DateInfo{
+		DayOfWeek:       dayOfWeek,
+		MonthName:       monthName,
+		WeekOfYear:      weekOfYear,
+		IsMarketHoliday: isMarketHoliday,
+		IsWeekend:       isWeekend,
+	}
+}
 
-// func onReady() {
-// 	// Simple 16x16 red square ICO as placeholder
-// 	icon := []byte{
-// 		0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10, 0x00, 0x00, 0x01, 0x00,
-// 		0x18, 0x00, 0x68, 0x03, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00, 0x28, 0x00,
-// 		0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x01, 0x00,
-// 		0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00,
-// 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-// 		0x00, 0x00,
-// 	}
-// 	// Fill with blue pixels (BGR format)
-// 	for i := 0; i < 16*16; i++ {
-// 		icon = append(icon, 0xFF, 0x00, 0x00) // Blue in BGR
-// 	}
-// 	// Add mask (all opaque)
-// 	for i := 0; i < 16*16/8; i++ {
-// 		icon = append(icon, 0x00)
-// 	}
+// GetAggregations aggregates records based on specified groupers and filters
+func (a *App) GetAggregations(grouperNames []string, filters map[string]string) []Aggregation {
+	// Map to accumulate durations: aggregation key -> duration
+	aggregationMap := make(map[string]int)
+	// Map to store grouper values: aggregation key -> grouper values
+	grouperValuesMap := make(map[string]map[string]interface{})
 
-// 	systray.SetIcon(icon)
-// 	systray.SetTitle("Tracker")
-// 	systray.SetTooltip("Window Tracker")
+	// Process each record
+	for _, record := range a.records {
+		// Check if record matches filters
+		if !a.matchesFilters(record, filters) {
+			continue
+		}
 
-// 	mQuit := systray.AddMenuItem("Exit", "Exit the tracker")
+		// Extract grouper values for this record
+		grouperValues := make(map[string]interface{})
+		keyParts := []string{}
 
-// 	// Handle quit menu click
-// 	go func() {
-// 		<-mQuit.ClickedCh
-// 		systray.Quit()
-// 	}()
+		for _, grouperName := range grouperNames {
+			value := a.extractGrouperValue(record, Grouper(grouperName))
+			grouperValues[grouperName] = value
+			keyParts = append(keyParts, fmt.Sprintf("%v", value))
+		}
 
-// 	// Start tracking loop
-// 	go trackingLoop()
-// }
+		// Create unique key for this combination of grouper values
+		key := strings.Join(keyParts, "|")
 
-// func onExit() {
-// 	storeReading(WindowReading{
-// 		ExePath:   "Off",
-// 		Timestamp: time.Now(),
-// 	})
-// }
+		// Accumulate duration
+		aggregationMap[key] += record.duration
+		grouperValuesMap[key] = grouperValues
+	}
 
-// func trackingLoop() {
-// 	ticker := time.NewTicker(5 * time.Second)
-// 	defer ticker.Stop()
+	// Convert map to slice of Aggregation structs
+	aggregations := []Aggregation{}
+	for key, duration := range aggregationMap {
+		aggregations = append(aggregations, Aggregation{
+			Groupers: grouperValuesMap[key],
+			Duration: duration,
+		})
+	}
 
-// 	// Take an initial reading immediately
-// 	if reading, err := getFocusedWindowInfo(); err == nil {
-// 		storeReading(reading)
-// 	}
+	return aggregations
+}
 
-// 	for {
-// 		<-ticker.C
-// 		reading, err := getFocusedWindowInfo()
-// 		if err != nil {
-// 			continue
-// 		}
-// 		storeReading(reading)
-// 	}
-// }
+// matchesFilters checks if a record matches all specified filters
+func (a *App) matchesFilters(record Record, filters map[string]string) bool {
+	for key, value := range filters {
+		switch key {
+		case "start_date":
+			startDate := 0
+			fmt.Sscanf(value, "%d", &startDate)
+			if record.date_id < startDate {
+				return false
+			}
+		case "end_date":
+			endDate := 0
+			fmt.Sscanf(value, "%d", &endDate)
+			if record.date_id > endDate {
+				return false
+			}
+		case "category":
+			if record.category != value {
+				return false
+			}
+		case "url":
+			if !strings.Contains(record.url, value) {
+				return false
+			}
+		case "exe_path":
+			if record.exe_path != value {
+				return false
+			}
+		case "name":
+			if record.name != value {
+				return false
+			}
+		case "is_weekend":
+			isWeekend := value == "true"
+			if record.date_info.IsWeekend != isWeekend {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// extractGrouperValue extracts the value for a given grouper from a record
+func (a *App) extractGrouperValue(record Record, grouper Grouper) interface{} {
+	switch grouper {
+	case GroupByDate:
+		return record.date_id
+	case GroupByWeek:
+		return record.date_info.WeekOfYear
+	case GroupByMonth:
+		return (record.date_id / 100) % 100 // extract month from YYYYMMDD
+	case GroupByYear:
+		return record.date_id / 10000 // extract year from YYYYMMDD
+	case GroupByDayOfWeek:
+		return record.date_info.DayOfWeek
+	case GroupByIsWeekend:
+		return record.date_info.IsWeekend
+	case GroupByCategory:
+		return record.category
+	case GroupByURL:
+		return record.url
+	case GroupByExePath:
+		return record.exe_path
+	case GroupByName:
+		return record.name
+	default:
+		return nil
+	}
+}
