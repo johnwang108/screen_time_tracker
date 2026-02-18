@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,10 +56,11 @@ type Aggregation struct {
 
 // App struct
 type App struct {
-	ctx                context.Context
-	records            []Record            // loaded records
-	categories         map[string]string   // map of url/exe_path to category
-	reverse_categories map[string][]string // map of category to list of url/exe_paths for easy lookup
+	ctx                  context.Context
+	records              []Record            // loaded records
+	categories           map[string]string   // map of url/exe_path to category
+	reverse_categories   map[string][]string // map of category to list of url/exe_paths for easy lookup
+	url_truncation_rules map[string][]string // map of base domain to list of truncation patterns
 
 }
 
@@ -73,9 +76,12 @@ func (a *App) startup(ctx context.Context) {
 	a.records = []Record{}
 	a.categories = make(map[string]string)
 	a.reverse_categories = make(map[string][]string)
+	a.url_truncation_rules = make(map[string][]string)
 
 	// populate categories
 	a.populate_categories()
+	// load URL truncation rules
+	a.loadURLTruncationRules()
 }
 
 // domReady is called after front-end resources have been loaded
@@ -119,7 +125,7 @@ Desired Functionality
 
 func (a *App) populate_categories() error {
 	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
-	data_file_path := filepath.Join(data_dir, "categories.json")
+	data_file_path := filepath.Join(data_dir, "preferences.json")
 	f, err := os.OpenFile(data_file_path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return err
@@ -142,6 +148,122 @@ func (a *App) populate_categories() error {
 	a.reverse_categories = reverse_categories
 
 	return nil
+}
+
+// loadURLTruncationRules loads URL truncation patterns from preferences.json
+func (a *App) loadURLTruncationRules() error {
+	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
+	data_file_path := filepath.Join(data_dir, "preferences.json")
+
+	file, err := os.Open(data_file_path)
+	if err != nil {
+		// If file doesn't exist, just use empty rules
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	var config struct {
+		URLTruncation map[string][]string `json:"url_truncation"`
+	}
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&config); err != nil {
+		// If JSON is malformed or empty, just use empty rules
+		return nil
+	}
+
+	a.url_truncation_rules = config.URLTruncation
+
+	return nil
+}
+
+// matchURLPattern attempts to match a URL path against a pattern with wildcards
+// Returns the truncated URL and whether it matched
+func (a *App) matchURLPattern(fullURL string, baseDomain string, pattern string) (string, bool) {
+	// Parse the full URL to extract the path
+	parsedURL, err := url.Parse(fullURL)
+	if err != nil {
+		return "", false
+	}
+
+	path := parsedURL.Path
+	if path == "" {
+		path = "/"
+	}
+
+	// Split pattern and path into segments
+	patternSegments := strings.Split(strings.Trim(pattern, "/"), "/")
+	pathSegments := strings.Split(strings.Trim(path, "/"), "/")
+
+	// Handle empty path case
+	if len(pathSegments) == 1 && pathSegments[0] == "" {
+		pathSegments = []string{}
+	}
+
+	// Match each segment
+	matchedSegments := []string{}
+	for i, patternSeg := range patternSegments {
+		if i >= len(pathSegments) {
+			return "", false // Not enough path segments
+		}
+
+		if patternSeg == "*" {
+			// Wildcard matches any single segment
+			matchedSegments = append(matchedSegments, pathSegments[i])
+		} else if patternSeg == pathSegments[i] {
+			// Exact match
+			matchedSegments = append(matchedSegments, pathSegments[i])
+		} else {
+			return "", false // No match
+		}
+	}
+
+	// Build truncated URL
+	if len(matchedSegments) > 0 {
+		return baseDomain + "/" + strings.Join(matchedSegments, "/"), true
+	}
+	return baseDomain, true
+}
+
+// truncateURL truncates a URL to its base form or applies domain-specific patterns
+func (a *App) truncateURL(rawURL string) string {
+	// Handle empty URLs
+	if rawURL == "" {
+		return ""
+	}
+
+	// Ensure URL has a scheme for proper parsing
+	parseURL := rawURL
+	if !strings.Contains(rawURL, "://") {
+		parseURL = "http://" + rawURL
+	}
+
+	parsedURL, err := url.Parse(parseURL)
+	if err != nil {
+		return rawURL // Return original if can't parse
+	}
+
+	// Extract host and remove www. prefix
+	host := parsedURL.Host
+	if strings.HasPrefix(host, "www.") {
+		host = strings.TrimPrefix(host, "www.")
+	}
+
+	// Check if this domain has truncation patterns
+	if patterns, exists := a.url_truncation_rules[host]; exists {
+		// Try to match against each pattern
+		for _, pattern := range patterns {
+			if truncated, matched := a.matchURLPattern(parseURL, host, pattern); matched {
+				return truncated
+			}
+		}
+	}
+
+	// No pattern matched or no patterns defined - return base domain
+	return host
 }
 
 // populate_records takes in the raw data from the CSV, header and all, and populates the App's records slice.
@@ -247,7 +369,7 @@ func (a *App) populate_records(records [][]string) error {
 			if currentExePath == "" {
 				// Start new record
 				currentExePath = exePath
-				currentUrl = tabUrl
+				currentUrl = a.truncateURL(tabUrl)
 				currentName = tabName
 				currentDateId = date_id
 				accumulatedDuration = duration
@@ -266,7 +388,7 @@ func (a *App) populate_records(records [][]string) error {
 				// Different activity - flush previous and start new
 				flushRecord()
 				currentExePath = exePath
-				currentUrl = tabUrl
+				currentUrl = a.truncateURL(tabUrl)
 				currentName = tabName
 				currentDateId = date_id
 				accumulatedDuration = duration

@@ -13,3 +13,6 @@ script/tracker.exe
 **test.go
 
 **claude**
+
+script/run_tracker.ps1
+script/setup_tasks.sh

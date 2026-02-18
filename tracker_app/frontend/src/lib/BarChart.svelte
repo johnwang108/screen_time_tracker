@@ -2,12 +2,11 @@
   type DataPoint = {
     label: string;
     value: number;
-    average: number;
   };
 
   let { data, weeklyAvg }: { data: DataPoint[]; weeklyAvg: number } = $props();
 
-  let rawMax = $derived(Math.max(...data.map((d) => Math.max(d.value, d.average)), 1));
+  let rawMax = $derived(Math.max(...data.map((d) => d.value), 1));
   let maxHours = $derived(Math.ceil(rawMax / 60));
   let maxValue = $derived(maxHours * 60);
   let yTicks = $derived(Array.from({ length: maxHours + 1 }, (_, i) => maxHours - i));
@@ -19,37 +18,60 @@
     <div class="bars-row">
       <div class="y-axis">
         {#each yTicks as hour}
-          <div class="y-tick">
+          {@const tickPosition = (hour / maxHours) * 100}
+          <div class="y-tick" style="bottom: {tickPosition}%">
             <span class="y-label">{hour}h</span>
             <span class="tick-mark"></span>
           </div>
         {/each}
       </div>
-      <div class="bars-area">
-        <div class="avg-line-wrapper" style="height: {weeklyAvgPercent}%">
-          <div class="avg-line"><span class="avg-label">avg</span></div>
+
+      <!-- Average line wrapper - spans both columns -->
+      <div class="avg-line-wrapper" style="height: {weeklyAvgPercent}%">
+        <div class="avg-line">
+          <span class="avg-label">avg</span>
         </div>
-        {#each data as point}
+      </div>
+
+      <div class="bars-area">
+        <!-- Horizontal grid lines -->
+        <div class="grid-container">
+          {#each yTicks as hour}
+            {@const gridLineHeight = (hour / maxHours) * 100}
+            <div class="grid-line-horizontal" style="bottom: {gridLineHeight}%"></div>
+          {/each}
+        </div>
+
+        <!-- Bar columns with vertical grid separators -->
+        {#each data as point, index}
           {@const valuePercent = (point.value / maxValue) * 100}
-          {@const avgPercent = (point.average / maxValue) * 100}
           <div class="bar-column">
             <div class="bar bar-value" style="height: {valuePercent}%"></div>
-            <div class="bar bar-average" style="height: {avgPercent}%"></div>
           </div>
+          {#if index < data.length - 1}
+            <div class="grid-separator">
+              <div class="grid-line-vertical"></div>
+            </div>
+          {/if}
         {/each}
       </div>
     </div>
     <div class="labels">
-      {#each data as point}
+      {#each data as point, index}
         <span class="label">{point.label}</span>
+        {#if index < data.length - 1}
+          <div class="label-separator"></div>
+        {/if}
       {/each}
     </div>
   </div>
 
+  <!-- Legend temporarily hidden - will be re-implemented later
   <div class="legend">
     <span class="legend-item"><span class="legend-box legend-value"></span> This week</span>
     <span class="legend-item"><span class="legend-box legend-avg"></span> Historical avg</span>
   </div>
+  -->
 </div>
 
 <style>
@@ -59,11 +81,11 @@
     --chart-padding: 1rem;
     --bar-gap: 4px;
 
-    --color-primary: #3b82f6;
-    --color-average: #e5e7eb;
-    --color-avg-line: #f97316;
-    --color-border: #e5e7eb;
-    --color-text-secondary: #6b7280;
+    --color-primary: var(--accent-color, #3b82f6);
+    --color-average: var(--border-color, #e5e7eb);
+    --color-avg-line: var(--avg-line-color, #f97316);
+    --color-border: var(--border-color, #e5e7eb);
+    --color-text-secondary: var(--text-secondary, #6b7280);
 
     width: 100%;
     height: 100%;
@@ -74,7 +96,7 @@
   .chart-area {
     flex: 1;
     display: grid;
-    grid-template-columns: auto 1fr;  /* Y-axis auto-sizes, chart takes rest */
+    grid-template-columns: 1fr auto;  /* Chart takes rest, Y-axis auto-sizes */
     grid-template-rows: 1fr auto;     /* Bars take space, labels at bottom */
     column-gap: var(--chart-gap);
     padding: var(--chart-padding) 0;  /* Padding moved here - outside the chart space */
@@ -87,24 +109,26 @@
   }
 
   .y-axis {
-    grid-column: 1;
+    grid-column: 2;
     grid-row: 1;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
+    position: relative;
     /* No padding - matches chart space exactly */
   }
 
   .y-tick {
+    position: absolute;
+    right: 0;
     display: flex;
     align-items: center;
     gap: 0.25rem;
+    flex-direction: row-reverse;  /* Tick mark on left, label on right */
+    transform: translateY(50%);  /* Center the tick on its position */
   }
 
   .y-label {
     font-size: var(--font-size-small);
     color: var(--color-text-secondary);
-    text-align: right;
+    text-align: left;
   }
 
   .tick-mark {
@@ -114,24 +138,55 @@
   }
 
   .bars-area {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 1;
     display: flex;
     align-items: flex-end;
-    gap: var(--chart-gap);
     position: relative;
-    padding-left: var(--chart-padding);  /* Only left padding for spacing after border */
+    padding-right: var(--chart-padding);  /* Only right padding for spacing before border */
     border-left: 1px solid var(--color-border);
+    border-right: 1px solid var(--color-border);
     min-height: 0;
   }
 
-  .avg-line-wrapper {
+  .grid-container {
     position: absolute;
     left: 0;
     right: 0;
+    top: 0;
     bottom: 0;
     pointer-events: none;
-    /* Now references the same height as bars (no padding offset) */
+    z-index: 0;
+  }
+
+  .grid-line-horizontal {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 1px dotted var(--chart-grid, #d1d5db);
+  }
+
+  .grid-separator {
+    width: var(--chart-gap);
+    height: 100%;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .grid-line-vertical {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: calc(-0.5rem - 1.5em);  /* Extend down through labels (margin-top + label height) */
+    border-left: 1px dotted var(--chart-grid, #d1d5db);
+  }
+
+  .avg-line-wrapper {
+    grid-column: 1 / 2;  /* Span both bars area and y-axis */
+    grid-row: 1;
+    position: relative;
+    pointer-events: none;
+    align-self: end;  /* Align to bottom of grid cell */
   }
 
   .avg-line {
@@ -141,16 +196,19 @@
     right: 0;
     border-top: 2px dotted var(--color-avg-line);
     display: flex;
-    justify-content: flex-end;
     align-items: center;
   }
 
   .avg-label {
+    position: absolute;
+    /* left: 70%;  */
+    left: calc(100% + 0.2rem);
     font-size: var(--font-size-small);
     color: var(--color-avg-line);
-    background: #ffffff;
-    padding: 0 0.25rem;
-    transform: translateY(-50%);
+    /* background: var(--card-bg, #f5f5f5); */
+    padding: 0 0;
+    /* transform: translate(-50%, -50%); */
+    transition: background-color 0.3s ease;
   }
 
   .bar-column {
@@ -160,6 +218,8 @@
     align-items: flex-end;
     justify-content: center;
     gap: var(--bar-gap);
+    position: relative;
+    z-index: 1;
   }
 
   .bar {
@@ -183,12 +243,11 @@
 
   .labels {
     /* Auto-aligns with bars - same grid column */
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 2;
     display: flex;
-    gap: var(--chart-gap);
     margin-top: 0.5rem;
-    padding-left: var(--chart-padding);  /* Matches bars-area left padding */
+    padding-right: var(--chart-padding);  /* Matches bars-area right padding */
   }
 
   .label {
@@ -198,6 +257,11 @@
     color: var(--color-text-secondary);
   }
 
+  .label-separator {
+    width: var(--chart-gap);
+    flex-shrink: 0;
+  }
+/* 
   .legend {
     display: flex;
     gap: 1.5rem;
@@ -226,5 +290,5 @@
 
   .legend-avg {
     background: var(--color-average);
-  }
+  } */
 </style>
