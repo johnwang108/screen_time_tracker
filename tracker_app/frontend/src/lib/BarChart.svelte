@@ -1,10 +1,21 @@
 <script lang="ts">
+  type Aggregation = {
+    groupers: Record<string, any>;
+    duration: number;
+  };
+
   type DataPoint = {
     label: string;
     value: number;
   };
 
-  let { data, weeklyAvg }: { data: DataPoint[]; weeklyAvg: number } = $props();
+  let { aggregations, transform, weeklyAvg }: {
+    aggregations: Aggregation[];
+    transform: (aggregations: Aggregation[]) => DataPoint[];
+    weeklyAvg: number;
+  } = $props();
+
+  let data = $derived(transform(aggregations));
 
   let rawMax = $derived(Math.max(...data.map((d) => d.value), 1));
   let maxHours = $derived(Math.ceil(rawMax / 60));

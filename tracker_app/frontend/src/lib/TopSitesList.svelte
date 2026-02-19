@@ -1,14 +1,37 @@
 <script lang="ts">
-  type TopSite = {
-    name: string;
-    duration: number; // in seconds
+  type Aggregation = {
+    groupers: Record<string, any>;
+    duration: number;
   };
 
-  type Props = {
-    sites: TopSite[];
-  };
+  let { aggregations }: { aggregations: Aggregation[] } = $props();
 
-  let { sites }: Props = $props();
+  // Extract app name from exe path (e.g. "C:\...\Code.exe" -> "Code")
+  function extractAppName(exePath: string): string {
+    const segments = exePath.split(/[/\\]/);
+    const filename = segments[segments.length - 1] || exePath;
+    return filename.replace(/\.exe$/i, '');
+  }
+
+  // Group by url for websites, exe_path for apps; sum durations, sort, take top 10
+  let sites = $derived.by(() => {
+    const siteMap = new Map<string, number>();
+    for (const agg of aggregations) {
+      const url = agg.groupers.url as string;
+      const exePath = agg.groupers.exe_path as string;
+      const identifier = url && url.trim() !== ""
+        ? url
+        : extractAppName(exePath || "Unknown");
+      if (identifier) {
+        const current = siteMap.get(identifier) || 0;
+        siteMap.set(identifier, current + agg.duration);
+      }
+    }
+    return Array.from(siteMap.entries())
+      .map(([name, duration]) => ({ name, duration }))
+      .sort((a, b) => b.duration - a.duration)
+      .slice(0, 10);
+  });
 
   // Format duration from seconds to "Xh Ym" format
   function formatDuration(seconds: number): string {
