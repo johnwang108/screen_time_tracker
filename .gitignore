@@ -16,3 +16,5 @@ script/tracker.exe
 
 script/run_tracker.ps1
 script/setup_tasks.sh
+
+tracker_app/build/bin
