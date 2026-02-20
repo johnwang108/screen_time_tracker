@@ -73,7 +73,14 @@
 
     <nav class="nav-section">
       <div class="nav-section-label">Configurations</div>
-      <!-- Empty for now -->
+      <a
+        class="nav-item"
+        class:active={$page.url.pathname === '/categorization'}
+        href="/categorization"
+      >
+        <span class="nav-icon">&#9673;</span>
+        Categorization
+      </a>
     </nav>
 
     <!-- Theme toggle at bottom -->
@@ -109,6 +116,9 @@
     --card-bg: #f5f5f5;
     --card-border: #e0e0e0;
     --card-shadow: rgba(0, 0, 0, 0.05);
+    --scrollbar-thumb: rgba(0, 0, 0, 0.15);
+    --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
+    --scrollbar-track: transparent;
 
     --font-size-heading: 1.25rem;
     --font-size-small: 12px;
@@ -131,6 +141,9 @@
     --card-bg: #1E1E1E;
     --card-border: #2A2A2A;
     --card-shadow: rgba(0, 0, 0, 0.3);
+    --scrollbar-thumb: rgba(255, 255, 255, 0.12);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
+    --scrollbar-track: transparent;
   }
 
   :global(html, body) {
@@ -142,6 +155,32 @@
     background: var(--bg-tertiary);
     color: var(--text-primary);
     transition: background-color 0.3s ease, color 0.3s ease;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    scrollbar-width: thin;
+  }
+
+  /* WebKit scrollbar styling */
+  :global(*::-webkit-scrollbar) {
+    width: 6px;
+    height: 6px;
+  }
+
+  :global(*::-webkit-scrollbar-track) {
+    background: var(--scrollbar-track);
+  }
+
+  :global(*::-webkit-scrollbar-thumb) {
+    background: var(--scrollbar-thumb);
+    border-radius: 3px;
+    transition: background 0.2s ease;
+  }
+
+  :global(*::-webkit-scrollbar-thumb:hover) {
+    background: var(--scrollbar-thumb-hover);
+  }
+
+  :global(*::-webkit-scrollbar-corner) {
+    background: transparent;
   }
 
   .container {

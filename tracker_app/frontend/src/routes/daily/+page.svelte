@@ -1,6 +1,7 @@
 <script lang="ts">
   import BarChart from "$lib/BarChart.svelte";
   import TopSitesList from "$lib/TopSitesList.svelte";
+  import TopCategoriesList from "$lib/TopCategoriesList.svelte";
   import { GetAggregations } from "../../../wailsjs/go/main/App.js";
   import { onMount } from "svelte";
 
@@ -16,7 +17,9 @@
 
   let dateAggregations: Aggregation[] = $state([]);
   let siteAggregations: Aggregation[] = $state([]);
+  let categoryAggregations: Aggregation[] = $state([]);
   let isLoading = $state(true);
+  let activeListTab: "sites" | "categories" = $state("sites");
   let daysElapsed = $state(7);
   let weekOverWeekChange = $state<number | null>(null);
 
@@ -87,14 +90,16 @@
     const lastWeekEndDate = lastWeekDateIds[6].toString();
 
     try {
-      const [dateAggs, siteAggs, lastWeekAggs] = await Promise.all([
+      const [dateAggs, siteAggs, catAggs, lastWeekAggs] = await Promise.all([
         GetAggregations(["date"], { start_date: startDate, end_date: endDate }),
         GetAggregations(["url", "exe_path"], { start_date: startDate, end_date: endDate }),
+        GetAggregations(["category"], { start_date: startDate, end_date: endDate }),
         GetAggregations(["date"], { start_date: lastWeekStartDate, end_date: lastWeekEndDate })
       ]);
 
       dateAggregations = dateAggs;
       siteAggregations = siteAggs;
+      categoryAggregations = catAggs;
 
       // Week-over-week change
       const lastWeekTotalSeconds = lastWeekAggs.reduce((sum: number, agg: Aggregation) => sum + agg.duration, 0);
@@ -163,9 +168,19 @@
 
 {#if !isLoading && siteAggregations.length > 0}
   <div class="section-wrapper">
-    <h2 class="section-heading">Top Sites & Apps This Week</h2>
+    <div class="list-header">
+      <h2 class="section-heading">Top This Week</h2>
+      <div class="list-tabs">
+        <button class="list-tab" class:active={activeListTab === "sites"} onclick={() => activeListTab = "sites"}>Sites & Apps</button>
+        <button class="list-tab" class:active={activeListTab === "categories"} onclick={() => activeListTab = "categories"}>Categories</button>
+      </div>
+    </div>
     <div class="content-card">
-      <TopSitesList aggregations={siteAggregations} />
+      {#if activeListTab === "sites"}
+        <TopSitesList aggregations={siteAggregations} />
+      {:else}
+        <TopCategoriesList aggregations={categoryAggregations} />
+      {/if}
     </div>
   </div>
 {/if}
@@ -187,5 +202,39 @@
   .week-over-week.negative {
     color: #dc2626;
     background: rgba(220, 38, 38, 0.1);
+  }
+
+  .list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.3rem;
+  }
+
+  .list-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .list-tab {
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 0.35rem 0.85rem;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .list-tab:hover {
+    color: var(--text-secondary);
+  }
+
+  .list-tab.active {
+    color: var(--accent-color);
+    font-weight: 600;
+    box-shadow: inset 0 -2px 0 var(--accent-color);
   }
 </style>

@@ -48,20 +48,32 @@ const (
 	GroupByName      Grouper = "name"
 )
 
+// CategoryItems holds the sites and apps assigned to a category
+type CategoryItems struct {
+	Sites []string `json:"sites"`
+	Apps  []string `json:"apps"`
+}
+
 // Aggregation represents aggregated time across multiple records
 type Aggregation struct {
 	Groupers map[string]interface{} `json:"groupers"`
 	Duration int                    `json:"duration"` // total duration in seconds
 }
 
+// CategoriesResponse is the shape returned to the frontend
+type CategoriesResponse struct {
+	Categories map[string]CategoryItems `json:"categories"`
+	Order      []string                 `json:"order"`
+}
+
 // App struct
 type App struct {
 	ctx                  context.Context
-	records              []Record            // loaded records
-	categories           map[string]string   // map of url/exe_path to category
-	reverse_categories   map[string][]string // map of category to list of url/exe_paths for easy lookup
-	url_truncation_rules map[string][]string // map of base domain to list of truncation patterns
-
+	records              []Record                 // loaded records
+	categories           map[string]string        // map of url/exe_path to category
+	reverse_categories   map[string]CategoryItems // map of category to its sites and apps
+	category_order       []string                 // display order of categories
+	url_truncation_rules map[string][]string      // map of base domain to list of truncation patterns
 }
 
 // NewApp creates a new App application struct
@@ -75,7 +87,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.records = []Record{}
 	a.categories = make(map[string]string)
-	a.reverse_categories = make(map[string][]string)
+	a.reverse_categories = make(map[string]CategoryItems)
 	a.url_truncation_rules = make(map[string][]string)
 
 	// populate categories
@@ -126,28 +138,193 @@ Desired Functionality
 func (a *App) populate_categories() error {
 	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
 	data_file_path := filepath.Join(data_dir, "preferences.json")
-	f, err := os.OpenFile(data_file_path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
+
+	// Try to read existing preferences
+	file, err := os.Open(data_file_path)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	defer f.Close()
 
-	// by default, url/exe_path -> category is empty
+	var rawConfig map[string]json.RawMessage
+	if err == nil {
+		defer file.Close()
+		decoder := json.NewDecoder(file)
+		if decErr := decoder.Decode(&rawConfig); decErr != nil {
+			rawConfig = nil
+		}
+	}
+
+	// Try to parse categories and order from config
+	reverseCategories := map[string]CategoryItems{}
 	categories := map[string]string{}
+	var categoryOrder []string
 
-	// by default, category -> url/exe_paths is empty. but pre-defined 5 categories
-	reverse_categories := map[string][]string{
-		"Other":         {},
-		"Work":          {},
-		"Productivity":  {},
-		"Entertainment": {},
-		"Games":         {},
+	if rawConfig != nil {
+		if catRaw, exists := rawConfig["categories"]; exists {
+			if jsonErr := json.Unmarshal(catRaw, &reverseCategories); jsonErr != nil {
+				reverseCategories = map[string]CategoryItems{}
+			}
+		}
+		if orderRaw, exists := rawConfig["category_order"]; exists {
+			json.Unmarshal(orderRaw, &categoryOrder)
+		}
+	}
+
+	// If no categories found, initialize defaults and save
+	if len(reverseCategories) == 0 {
+		defaultOrder := []string{"Work", "Productivity", "Entertainment", "Games"}
+		reverseCategories = map[string]CategoryItems{
+			"Work":          {Sites: []string{}, Apps: []string{}},
+			"Productivity":  {Sites: []string{}, Apps: []string{}},
+			"Entertainment": {Sites: []string{}, Apps: []string{}},
+			"Games":         {Sites: []string{}, Apps: []string{}},
+		}
+		a.reverse_categories = reverseCategories
+		a.categories = categories
+		a.category_order = defaultOrder
+		a.saveCategories()
+		return nil
+	}
+
+	// Ensure category_order is in sync with the categories map
+	if len(categoryOrder) == 0 {
+		for name := range reverseCategories {
+			categoryOrder = append(categoryOrder, name)
+		}
+	}
+
+	// Build forward map (identifier -> category) from reverse map
+	for categoryName, items := range reverseCategories {
+		for _, site := range items.Sites {
+			categories[site] = categoryName
+		}
+		for _, app := range items.Apps {
+			categories[app] = categoryName
+		}
 	}
 
 	a.categories = categories
-	a.reverse_categories = reverse_categories
-
+	a.reverse_categories = reverseCategories
+	a.category_order = categoryOrder
 	return nil
+}
+
+// saveCategories persists the current reverse_categories to preferences.json,
+// preserving other keys like url_truncation
+func (a *App) saveCategories() error {
+	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
+	data_file_path := filepath.Join(data_dir, "preferences.json")
+
+	// Read existing file to preserve other keys
+	rawConfig := map[string]json.RawMessage{}
+	if file, err := os.Open(data_file_path); err == nil {
+		decoder := json.NewDecoder(file)
+		decoder.Decode(&rawConfig)
+		file.Close()
+	}
+
+	// Marshal categories and order, then update keys
+	catBytes, err := json.Marshal(a.reverse_categories)
+	if err != nil {
+		return err
+	}
+	rawConfig["categories"] = catBytes
+
+	orderBytes, err := json.Marshal(a.category_order)
+	if err != nil {
+		return err
+	}
+	rawConfig["category_order"] = orderBytes
+
+	// Write back with indentation
+	output, err := json.MarshalIndent(rawConfig, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(data_file_path, output, 0644)
+}
+
+// GetCategories returns the categories and their display order for the frontend
+func (a *App) GetCategories() CategoriesResponse {
+	return CategoriesResponse{
+		Categories: a.reverse_categories,
+		Order:      a.category_order,
+	}
+}
+
+// SetItemCategory moves an identifier to a new category (or uncategorizes if category is "")
+func (a *App) SetItemCategory(identifier string, category string, isApp bool) error {
+	// Remove from old category if it exists
+	if oldCategory, exists := a.categories[identifier]; exists {
+		items := a.reverse_categories[oldCategory]
+		if isApp {
+			items.Apps = removeFromSlice(items.Apps, identifier)
+		} else {
+			items.Sites = removeFromSlice(items.Sites, identifier)
+		}
+		a.reverse_categories[oldCategory] = items
+		delete(a.categories, identifier)
+	}
+
+	// Add to new category (unless uncategorizing)
+	if category != "" {
+		items := a.reverse_categories[category]
+		if isApp {
+			items.Apps = append(items.Apps, identifier)
+		} else {
+			items.Sites = append(items.Sites, identifier)
+		}
+		a.reverse_categories[category] = items
+		a.categories[identifier] = category
+	}
+
+	if err := a.saveCategories(); err != nil {
+		return err
+	}
+	a.recategorizeRecords()
+	return nil
+}
+
+// CreateCategory adds a new empty category and appends it to the display order
+func (a *App) CreateCategory(name string) error {
+	if _, exists := a.reverse_categories[name]; exists {
+		return fmt.Errorf("category '%s' already exists", name)
+	}
+	a.reverse_categories[name] = CategoryItems{Sites: []string{}, Apps: []string{}}
+	a.category_order = append(a.category_order, name)
+	return a.saveCategories()
+}
+
+// ReorderCategories updates the display order of categories
+func (a *App) ReorderCategories(order []string) error {
+	// Validate that the order contains exactly the existing categories
+	if len(order) != len(a.reverse_categories) {
+		return fmt.Errorf("order length does not match number of categories")
+	}
+	for _, name := range order {
+		if _, exists := a.reverse_categories[name]; !exists {
+			return fmt.Errorf("unknown category '%s'", name)
+		}
+	}
+	a.category_order = order
+	return a.saveCategories()
+}
+
+// recategorizeRecords re-applies categorization to all loaded records
+func (a *App) recategorizeRecords() {
+	for i := range a.records {
+		a.records[i].category = a.categorize(a.records[i].exe_path, a.records[i].url)
+	}
+}
+
+// removeFromSlice removes the first occurrence of item from slice
+func removeFromSlice(slice []string, item string) []string {
+	for i, v := range slice {
+		if v == item {
+			return append(slice[:i], slice[i+1:]...)
+		}
+	}
+	return slice
 }
 
 // loadURLTruncationRules loads URL truncation patterns from preferences.json
