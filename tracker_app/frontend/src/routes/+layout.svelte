@@ -1,9 +1,15 @@
 <script lang="ts">
   import { page } from '$app/stores';
+  import { onMount } from 'svelte';
+  import { GetDarkMode, SetDarkMode } from '../../wailsjs/go/main/App.js';
 
   let { children } = $props();
 
   let isDarkMode = $state(false);
+
+  onMount(async () => {
+    isDarkMode = await GetDarkMode();
+  });
   let leftPanelWidth = $state(325);
   let isDragging = $state(false);
 
@@ -84,7 +90,7 @@
     </nav>
 
     <!-- Theme toggle at bottom -->
-    <div class="theme-toggle" onclick={() => isDarkMode = !isDarkMode}>
+    <div class="theme-toggle" onclick={() => { isDarkMode = !isDarkMode; SetDarkMode(isDarkMode); }}>
       <span class="theme-icon">{isDarkMode ? '☀' : '🌙'}</span>
       <span class="theme-label">{isDarkMode ? 'Light Mode' : 'Dark Mode'}</span>
     </div>

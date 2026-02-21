@@ -74,6 +74,7 @@ type App struct {
 	reverse_categories   map[string]CategoryItems // map of category to its sites and apps
 	category_order       []string                 // display order of categories
 	url_truncation_rules map[string][]string      // map of base domain to list of truncation patterns
+	dark_mode            bool
 }
 
 // NewApp creates a new App application struct
@@ -94,6 +95,8 @@ func (a *App) startup(ctx context.Context) {
 	a.populate_categories()
 	// load URL truncation rules
 	a.loadURLTruncationRules()
+	// load dark mode preference
+	a.loadDarkMode()
 }
 
 // domReady is called after front-end resources have been loaded
@@ -122,7 +125,7 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 
 // shutdown is called at application termination
 func (a *App) shutdown(ctx context.Context) {
-
+	a.saveDarkMode()
 }
 
 /*
@@ -242,6 +245,61 @@ func (a *App) saveCategories() error {
 		return err
 	}
 	return os.WriteFile(data_file_path, output, 0644)
+}
+
+// loadDarkMode reads the dark_mode key from preferences.json into app state
+func (a *App) loadDarkMode() {
+	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
+	data_file_path := filepath.Join(data_dir, "preferences.json")
+
+	file, err := os.Open(data_file_path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	var rawConfig map[string]json.RawMessage
+	if err := json.NewDecoder(file).Decode(&rawConfig); err != nil {
+		return
+	}
+
+	if darkModeRaw, exists := rawConfig["dark_mode"]; exists {
+		json.Unmarshal(darkModeRaw, &a.dark_mode)
+	}
+}
+
+// saveDarkMode writes the dark_mode key to preferences.json, preserving other keys
+func (a *App) saveDarkMode() error {
+	data_dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "tracker_data")
+	data_file_path := filepath.Join(data_dir, "preferences.json")
+
+	rawConfig := map[string]json.RawMessage{}
+	if file, err := os.Open(data_file_path); err == nil {
+		json.NewDecoder(file).Decode(&rawConfig)
+		file.Close()
+	}
+
+	darkModeBytes, err := json.Marshal(a.dark_mode)
+	if err != nil {
+		return err
+	}
+	rawConfig["dark_mode"] = darkModeBytes
+
+	output, err := json.MarshalIndent(rawConfig, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(data_file_path, output, 0644)
+}
+
+// GetDarkMode returns the current dark mode preference
+func (a *App) GetDarkMode() bool {
+	return a.dark_mode
+}
+
+// SetDarkMode updates the in-memory dark mode preference (persisted on shutdown)
+func (a *App) SetDarkMode(darkMode bool) {
+	a.dark_mode = darkMode
 }
 
 // GetCategories returns the categories and their display order for the frontend
