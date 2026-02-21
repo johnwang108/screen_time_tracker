@@ -1,11 +1,8 @@
 <script lang="ts">
   import { GetAggregations, GetCategories, SetItemCategory, CreateCategory, ReorderCategories } from "../../../wailsjs/go/main/App.js";
   import { onMount, tick } from "svelte";
-
-  type Aggregation = {
-    groupers: Record<string, any>;
-    duration: number;
-  };
+  import type { Aggregation } from "$lib/utils";
+  import { formatDuration } from "$lib/utils";
 
   type CategoryItems = {
     sites: string[];
@@ -21,7 +18,7 @@
 
   let categoriesMap: Record<string, CategoryItems> = $state({});
   let categoryOrder: string[] = $state([]);
-  let uncategorizedAggregations: Aggregation[] = $state([]);
+  let allItemAggregations: Aggregation[] = $state([]);
   let isLoading = $state(true);
 
   // Item drag-and-drop state
@@ -37,6 +34,7 @@
   let validationError = $state("");
   let categoryInputEl: HTMLInputElement | undefined = $state(undefined);
   let inputFocused = $state(false);
+  let hideShort = $state(false);
 
   // Panel resize state
   let rightPanelWidth = $state(38);  // percentage
@@ -77,13 +75,13 @@
 
   async function fetchData() {
     try {
-      const [catResponse, uncatAggs] = await Promise.all([
+      const [catResponse, allItemAggs] = await Promise.all([
         GetCategories(),
-        GetAggregations(["url", "exe_path"], { category: "Other" })
+        GetAggregations(["url", "exe_path", "category"], {})
       ]);
       categoriesMap = catResponse.categories;
       categoryOrder = catResponse.order;
-      uncategorizedAggregations = uncatAggs;
+      allItemAggregations = allItemAggs;
     } catch (error) {
       console.error("Failed to fetch categorization data:", error);
     } finally {
@@ -91,10 +89,21 @@
     }
   }
 
+  let durationMap = $derived.by(() => {
+    const map = new Map<string, number>();
+    for (const agg of allItemAggregations) {
+      const key = (agg.groupers.url as string) || (agg.groupers.exe_path as string);
+      if (key) map.set(key, (map.get(key) || 0) + agg.duration);
+    }
+    return map;
+  });
+
   let uncategorizedItems: UncategorizedItem[] = $derived.by(() => {
     const itemMap = new Map<string, UncategorizedItem>();
+    for (const agg of allItemAggregations) {
+      const category = agg.groupers.category as string;
+      if (category && category !== "Other") continue;
 
-    for (const agg of uncategorizedAggregations) {
       const url = agg.groupers.url as string;
       const exePath = agg.groupers.exe_path as string;
 
@@ -135,13 +144,6 @@
       return filename.replace(/\.exe$/i, "");
     }
     return identifier;
-  }
-
-  function formatDuration(seconds: number): string {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.round((seconds % 3600) / 60);
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m`;
   }
 
   function validateCategoryName(name: string): string | null {
@@ -284,11 +286,21 @@
   <div class="categorization-layout" bind:this={containerEl} style="grid-template-columns: 1fr 4px {rightPanelWidth}%;">
     <!-- Left panel: Category groups -->
     <div class="categories-panel">
-      <h2 class="panel-heading">Categories</h2>
+      <div class="categories-panel-header">
+        <h2 class="panel-heading">Categories</h2>
+        <button class="toggle-short" class:active={hideShort} onclick={() => hideShort = !hideShort}>
+          &lt;1h
+        </button>
+      </div>
 
       {#each categoryOrder as categoryName, index}
         {@const items = categoriesMap[categoryName]}
         {#if items}
+          {@const allItems = [
+            ...items.sites.map(id => ({ id, isApp: false })),
+            ...items.apps.map(id => ({ id, isApp: true }))
+          ].sort((a, b) => (durationMap.get(b.id) ?? 0) - (durationMap.get(a.id) ?? 0))
+            .filter(item => !hideShort || (durationMap.get(item.id) ?? 0) >= 3600)}
           <div
             class="category-group"
             class:drag-over={dragOverCategory === categoryName}
@@ -320,35 +332,21 @@
               <span class="category-title">{categoryName}</span>
             </div>
             <div class="category-items">
-              {#if items.sites.length === 0 && items.apps.length === 0}
+              {#if allItems.length === 0}
                 <div class="empty-hint">Drop items here</div>
               {/if}
-              {#each items.sites as site}
+              {#each allItems as item}
                 <div
                   class="category-item"
                   draggable="true"
-                  ondragstart={(e) => handleItemDragStart(e, site, false)}
+                  ondragstart={(e) => handleItemDragStart(e, item.id, item.isApp)}
                   role="button"
                   tabindex="0"
                 >
-                  <div class="item-icon">
-                    <span class="icon-label">S</span>
+                  <div class="item-icon" class:app={item.isApp} class:site={!item.isApp}>
+                    <span class="icon-label">{formatDuration(durationMap.get(item.id) ?? 0, true)}</span>
                   </div>
-                  <span class="item-name">{extractDisplayName(site, false)}</span>
-                </div>
-              {/each}
-              {#each items.apps as app}
-                <div
-                  class="category-item"
-                  draggable="true"
-                  ondragstart={(e) => handleItemDragStart(e, app, true)}
-                  role="button"
-                  tabindex="0"
-                >
-                  <div class="item-icon">
-                    <span class="icon-label">A</span>
-                  </div>
-                  <span class="item-name">{extractDisplayName(app, true)}</span>
+                  <span class="item-name">{extractDisplayName(item.id, item.isApp)}</span>
                 </div>
               {/each}
             </div>
@@ -405,20 +403,19 @@
           {/if}
         </div>
 
-        <div class="uncategorized-list">
-          {#each uncategorizedItems as item}
+        <div class="category-items">
+          {#each uncategorizedItems.filter(item => !hideShort || item.duration >= 3600) as item}
             <div
-              class="uncategorized-item"
+              class="category-item"
               draggable="true"
               ondragstart={(e) => handleItemDragStart(e, item.identifier, item.isApp)}
               role="button"
               tabindex="0"
             >
-              <div class="item-info">
-                <span class="item-type-badge" class:app={item.isApp}>{item.isApp ? "APP" : "SITE"}</span>
-                <span class="item-display-name">{item.displayName}</span>
+              <div class="item-icon" class:app={item.isApp} class:site={!item.isApp}>
+                <span class="icon-label">{formatDuration(item.duration, true)}</span>
               </div>
-              <span class="item-duration">{formatDuration(item.duration)}</span>
+              <span class="item-name">{item.displayName}</span>
             </div>
           {/each}
           {#if uncategorizedItems.length === 0}
@@ -558,8 +555,18 @@
     justify-content: center;
   }
 
+  .item-icon.app {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.3);
+  }
+
+  .item-icon.site {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: rgba(16, 185, 129, 0.3);
+  }
+
   .icon-label {
-    font-size: 0.75rem;
+    font-size: 0.6rem;
     font-weight: 600;
     color: var(--text-tertiary);
   }
@@ -680,11 +687,40 @@
     background: var(--accent-bg);
   }
 
+  .categories-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
   .uncategorized-header {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     flex-shrink: 0;
+  }
+
+  .toggle-short {
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .toggle-short:hover {
+    color: var(--text-secondary);
+    border-color: var(--text-secondary);
+  }
+
+  .toggle-short.active {
+    background: var(--accent-bg);
+    color: var(--accent-color);
+    border-color: var(--accent-color);
   }
 
   .item-count {
@@ -696,64 +732,4 @@
     border-radius: 10px;
   }
 
-  .uncategorized-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .uncategorized-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 0.5rem 0.6rem;
-    border-radius: 8px;
-    cursor: grab;
-    transition: background-color 0.15s ease;
-  }
-
-  .uncategorized-item:hover {
-    background: var(--hover-bg);
-  }
-
-  .uncategorized-item:active {
-    cursor: grabbing;
-  }
-
-  .item-info {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    min-width: 0;
-  }
-
-  .item-type-badge {
-    font-size: 9px;
-    font-weight: 700;
-    padding: 2px 5px;
-    border-radius: 4px;
-    background: var(--accent-bg);
-    color: var(--accent-color);
-    flex-shrink: 0;
-  }
-
-  .item-type-badge.app {
-    background: rgba(16, 185, 129, 0.1);
-    color: #10b981;
-  }
-
-  .item-display-name {
-    font-size: 0.85rem;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .item-duration {
-    font-size: 0.8rem;
-    color: var(--text-secondary);
-    flex-shrink: 0;
-    margin-left: 0.5rem;
-  }
 </style>

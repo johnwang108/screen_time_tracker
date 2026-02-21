@@ -1,13 +1,5 @@
 <script lang="ts">
-  type Aggregation = {
-    groupers: Record<string, any>;
-    duration: number;
-  };
-
-  type DataPoint = {
-    label: string;
-    value: number;
-  };
+  import type { Aggregation, DataPoint } from "$lib/utils";
 
   let { aggregations, transform, weeklyAvg }: {
     aggregations: Aggregation[];
@@ -15,9 +7,73 @@
     weeklyAvg: number;
   } = $props();
 
+  const OTHER_COLOR = '#9ca3af';
+
+  let hoveredCategory: string | null = $state(null);
+
   let data = $derived(transform(aggregations));
 
-  let rawMax = $derived(Math.max(...data.map((d) => d.value), 1));
+  // Group flat DataPoints by label, preserving order of first appearance
+  let bars = $derived.by(() => {
+    const labelOrder: string[] = [];
+    const labelMap = new Map<string, { category: string; value: number }[]>();
+
+    for (const point of data) {
+      if (!labelMap.has(point.label)) {
+        labelOrder.push(point.label);
+        labelMap.set(point.label, []);
+      }
+      if (point.category && point.value > 0) {
+        labelMap.get(point.label)!.push({ category: point.category, value: point.value });
+      }
+    }
+
+    return labelOrder.map(label => {
+      const segments = (labelMap.get(label) || []).sort((a, b) => {
+        if (a.category === 'Other') return 1;
+        if (b.category === 'Other') return -1;
+        return a.category.localeCompare(b.category);
+      });
+      return {
+        label,
+        segments,
+        total: segments.reduce((s, seg) => s + seg.value, 0)
+      };
+    });
+  });
+
+  // Unique categories sorted alphabetically, "Other" always last
+  let allCategories = $derived.by(() => {
+    const catSet = new Set<string>();
+    for (const bar of bars) {
+      for (const seg of bar.segments) {
+        catSet.add(seg.category);
+      }
+    }
+    return Array.from(catSet)
+      .filter(c => c !== 'Other')
+      .sort((a, b) => a.localeCompare(b))
+      .concat(catSet.has('Other') ? ['Other'] : []);
+  });
+
+  function categoryColor(name: string): string {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) {
+      hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+    }
+    const hue = (hash * 137.508) % 360;
+    return `hsl(${hue.toFixed(1)}, 65%, 52%)`;
+  }
+
+  let colorMap = $derived.by(() => {
+    const map = new Map<string, string>();
+    for (const cat of allCategories) {
+      map.set(cat, cat === 'Other' ? OTHER_COLOR : categoryColor(cat));
+    }
+    return map;
+  });
+
+  let rawMax = $derived(Math.max(...bars.map(b => b.total), 1));
   let maxHours = $derived(Math.ceil(rawMax / 60));
   let maxValue = $derived(maxHours * 60);
   let yTicks = $derived(Array.from({ length: maxHours + 1 }, (_, i) => maxHours - i));
@@ -53,13 +109,24 @@
           {/each}
         </div>
 
-        <!-- Bar columns with vertical grid separators -->
-        {#each data as point, index}
-          {@const valuePercent = (point.value / maxValue) * 100}
+        <!-- Bar columns -->
+        {#each bars as bar, index}
+          {@const valuePercent = (bar.total / maxValue) * 100}
           <div class="bar-column">
-            <div class="bar bar-value" style="height: {valuePercent}%"></div>
+            <div class="bar-stack" style="height: {valuePercent}%">
+              {#each bar.segments as seg}
+                {@const segPercent = bar.total > 0 ? (seg.value / bar.total) * 100 : 0}
+                <div
+                  class="segment"
+                  class:dimmed={hoveredCategory !== null && hoveredCategory !== seg.category}
+                  style="height: {segPercent}%; background: {colorMap.get(seg.category) ?? OTHER_COLOR}"
+                  onmouseenter={() => hoveredCategory = seg.category}
+                  onmouseleave={() => hoveredCategory = null}
+                ></div>
+              {/each}
+            </div>
           </div>
-          {#if index < data.length - 1}
+          {#if index < bars.length - 1}
             <div class="grid-separator">
               <div class="grid-line-vertical"></div>
             </div>
@@ -67,22 +134,32 @@
         {/each}
       </div>
     </div>
+
     <div class="labels">
-      {#each data as point, index}
-        <span class="label">{point.label}</span>
-        {#if index < data.length - 1}
+      {#each bars as bar, index}
+        <span class="label">{bar.label}</span>
+        {#if index < bars.length - 1}
           <div class="label-separator"></div>
         {/if}
       {/each}
     </div>
   </div>
 
-  <!-- Legend temporarily hidden - will be re-implemented later
   <div class="legend">
-    <span class="legend-item"><span class="legend-box legend-value"></span> This week</span>
-    <span class="legend-item"><span class="legend-box legend-avg"></span> Historical avg</span>
+    {#each allCategories as cat}
+      <span
+        class="legend-item"
+        class:dimmed={hoveredCategory !== null && hoveredCategory !== cat}
+        onmouseenter={() => hoveredCategory = cat}
+        onmouseleave={() => hoveredCategory = null}
+        role="button"
+        tabindex="0"
+      >
+        <span class="legend-box" style="background: {colorMap.get(cat)}"></span>
+        {cat}
+      </span>
+    {/each}
   </div>
-  -->
 </div>
 
 <style>
@@ -92,8 +169,6 @@
     --chart-padding: 1rem;
     --bar-gap: 4px;
 
-    --color-primary: var(--accent-color, #3b82f6);
-    --color-average: var(--border-color, #e5e7eb);
     --color-avg-line: var(--avg-line-color, #f97316);
     --color-border: var(--border-color, #e5e7eb);
     --color-text-secondary: var(--text-secondary, #6b7280);
@@ -107,15 +182,14 @@
   .chart-area {
     flex: 1;
     display: grid;
-    grid-template-columns: 1fr auto;  /* Chart takes rest, Y-axis auto-sizes */
-    grid-template-rows: 1fr auto;     /* Bars take space, labels at bottom */
+    grid-template-columns: 1fr auto;
+    grid-template-rows: 1fr auto;
     column-gap: var(--chart-gap);
-    padding: var(--chart-padding) 0;  /* Padding moved here - outside the chart space */
+    padding: var(--chart-padding) 0;
     min-height: 0;
   }
 
   .bars-row {
-    /* Remove from grid flow - children become direct grid items */
     display: contents;
   }
 
@@ -123,7 +197,6 @@
     grid-column: 2;
     grid-row: 1;
     position: relative;
-    /* No padding - matches chart space exactly */
   }
 
   .y-tick {
@@ -132,8 +205,8 @@
     display: flex;
     align-items: center;
     gap: 0.25rem;
-    flex-direction: row-reverse;  /* Tick mark on left, label on right */
-    transform: translateY(50%);  /* Center the tick on its position */
+    flex-direction: row-reverse;
+    transform: translateY(50%);
   }
 
   .y-label {
@@ -154,7 +227,7 @@
     display: flex;
     align-items: flex-end;
     position: relative;
-    padding-right: var(--chart-padding);  /* Only right padding for spacing before border */
+    padding-right: var(--chart-padding);
     border-left: 1px solid var(--color-border);
     border-right: 1px solid var(--color-border);
     min-height: 0;
@@ -188,16 +261,16 @@
     position: absolute;
     left: 50%;
     top: 0;
-    bottom: calc(-0.5rem - 1.5em);  /* Extend down through labels (margin-top + label height) */
+    bottom: calc(-0.5rem - 1.5em);
     border-left: 1px dotted var(--chart-grid, #d1d5db);
   }
 
   .avg-line-wrapper {
-    grid-column: 1 / 2;  /* Span both bars area and y-axis */
+    grid-column: 1 / 2;
     grid-row: 1;
     position: relative;
     pointer-events: none;
-    align-self: end;  /* Align to bottom of grid cell */
+    align-self: end;
   }
 
   .avg-line {
@@ -212,13 +285,10 @@
 
   .avg-label {
     position: absolute;
-    /* left: 70%;  */
     left: calc(100% + 0.2rem);
     font-size: var(--font-size-small);
     color: var(--color-avg-line);
-    /* background: var(--card-bg, #f5f5f5); */
     padding: 0 0;
-    /* transform: translate(-50%, -50%); */
     transition: background-color 0.3s ease;
   }
 
@@ -228,37 +298,35 @@
     display: flex;
     align-items: flex-end;
     justify-content: center;
-    gap: var(--bar-gap);
     position: relative;
     z-index: 1;
   }
 
-  .bar {
+  .bar-stack {
     width: 40%;
     max-width: 2rem;
+    display: flex;
+    flex-direction: column;
     border-radius: 4px 4px 0 0;
+    overflow: hidden;
+  }
+
+  .segment {
+    width: 100%;
+    flex-shrink: 0;
     transition: opacity 0.15s ease;
   }
 
-  .bar-value {
-    background: var(--color-primary);
-  }
-
-  .bar-average {
-    background: var(--color-average);
-  }
-
-  .bar-column:hover .bar {
-    opacity: 0.8;
+  .segment.dimmed {
+    opacity: 0.15;
   }
 
   .labels {
-    /* Auto-aligns with bars - same grid column */
     grid-column: 1;
     grid-row: 2;
     display: flex;
     margin-top: 0.5rem;
-    padding-right: var(--chart-padding);  /* Matches bars-area right padding */
+    padding-right: var(--chart-padding);
   }
 
   .label {
@@ -272,10 +340,11 @@
     width: var(--chart-gap);
     flex-shrink: 0;
   }
-/* 
+
   .legend {
     display: flex;
-    gap: 1.5rem;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
     justify-content: center;
     padding-top: var(--chart-padding);
     border-top: 1px solid var(--color-border);
@@ -286,20 +355,19 @@
   .legend-item {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
+    cursor: default;
+    transition: opacity 0.15s ease;
+  }
+
+  .legend-item.dimmed {
+    opacity: 0.3;
   }
 
   .legend-box {
-    width: 0.75rem;
-    height: 0.75rem;
+    width: 0.65rem;
+    height: 0.65rem;
     border-radius: 2px;
+    flex-shrink: 0;
   }
-
-  .legend-value {
-    background: var(--color-primary);
-  }
-
-  .legend-avg {
-    background: var(--color-average);
-  } */
 </style>

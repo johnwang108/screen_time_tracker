@@ -1,8 +1,6 @@
 <script lang="ts">
-  type Aggregation = {
-    groupers: Record<string, any>;
-    duration: number;
-  };
+  import type { Aggregation } from "$lib/utils";
+  import { formatDuration } from "$lib/utils";
 
   let { aggregations }: { aggregations: Aggregation[] } = $props();
 
@@ -32,17 +30,6 @@
       .sort((a, b) => b.duration - a.duration)
       .slice(0, 10);
   });
-
-  // Format duration from seconds to "Xh Ym" format
-  function formatDuration(seconds: number): string {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-
-    if (hours > 0) {
-      return `${hours}h ${minutes}m`;
-    }
-    return `${minutes}m`;
-  }
 
   // Get max duration for scaling bars
   let maxDuration = $derived(

@@ -1,26 +1,14 @@
 <script lang="ts">
   import BarChart from "$lib/BarChart.svelte";
-  import TopSitesList from "$lib/TopSitesList.svelte";
-  import TopCategoriesList from "$lib/TopCategoriesList.svelte";
+  import TopListSection from "$lib/TopListSection.svelte";
   import { GetAggregations } from "../../../wailsjs/go/main/App.js";
   import { onMount } from "svelte";
-
-  type Aggregation = {
-    groupers: Record<string, any>;
-    duration: number;
-  };
-
-  type DataPoint = {
-    label: string;
-    value: number;
-  };
+  import type { Aggregation, DataPoint } from "$lib/utils";
 
   let dateAggregations: Aggregation[] = $state([]);
   let siteAggregations: Aggregation[] = $state([]);
   let categoryAggregations: Aggregation[] = $state([]);
   let isLoading = $state(true);
-  let activeListTab: "sites" | "categories" = $state("sites");
-
   onMount(async () => {
     await fetchWeeklyData();
   });
@@ -42,9 +30,14 @@
     const currentMonday = new Date(today);
     currentMonday.setDate(today.getDate() - daysSinceMonday);
 
-    const durationMap = new Map<number, number>();
+    // dateId -> category -> seconds
+    const dateMap = new Map<number, Map<string, number>>();
     for (const agg of aggregations) {
-      durationMap.set(agg.groupers.date as number, agg.duration);
+      const dateId = agg.groupers.date as number;
+      const category = (agg.groupers.category as string) || "Other";
+      if (!dateMap.has(dateId)) dateMap.set(dateId, new Map());
+      const catMap = dateMap.get(dateId)!;
+      catMap.set(category, (catMap.get(category) || 0) + agg.duration);
     }
 
     const bars: DataPoint[] = [];
@@ -59,47 +52,61 @@
       monday.setDate(currentMonday.getDate() - w * 7);
       const weekLabel = `${monday.getMonth() + 1}/${monday.getDate()}`;
 
-      let weekdaySeconds = 0;
-      let weekdayDaysElapsed = 0;
-      let weekendSeconds = 0;
-      let weekendDaysElapsed = 0;
+      const wdCats = new Map<string, number>();
+      let wdDays = 0;
+      const weCats = new Map<string, number>();
+      let weDays = 0;
 
       for (let d = 0; d < 7; d++) {
         const date = new Date(monday);
         date.setDate(monday.getDate() + d);
-
-        // Skip future dates
         if (date > today) continue;
 
         const dateId = toDateId(date);
-        const duration = durationMap.get(dateId) || 0;
+        const catMap = dateMap.get(dateId);
         const dow = date.getDay();
 
         if (dow === 0 || dow === 6) {
-          weekendSeconds += duration;
-          weekendDaysElapsed++;
+          weDays++;
+          if (catMap) {
+            for (const [cat, dur] of catMap) {
+              weCats.set(cat, (weCats.get(cat) || 0) + dur);
+            }
+          }
         } else {
-          weekdaySeconds += duration;
-          weekdayDaysElapsed++;
+          wdDays++;
+          if (catMap) {
+            for (const [cat, dur] of catMap) {
+              wdCats.set(cat, (wdCats.get(cat) || 0) + dur);
+            }
+          }
         }
       }
 
-      if (weekdayDaysElapsed > 0) {
-        bars.push({
-          label: `${weekLabel} WD`,
-          value: Math.round(weekdaySeconds / (60 * weekdayDaysElapsed))
-        });
-        totalWeekdaySeconds += weekdaySeconds;
-        totalWeekdayDays += weekdayDaysElapsed;
+      if (wdDays > 0) {
+        const wdTotal = Array.from(wdCats.values()).reduce((s, v) => s + v, 0);
+        totalWeekdaySeconds += wdTotal;
+        totalWeekdayDays += wdDays;
+        if (wdCats.size > 0) {
+          for (const [category, totalSec] of wdCats) {
+            bars.push({ label: `${weekLabel} WD`, value: Math.round(totalSec / (60 * wdDays)), category });
+          }
+        } else {
+          bars.push({ label: `${weekLabel} WD`, value: 0 });
+        }
       }
 
-      if (weekendDaysElapsed > 0) {
-        bars.push({
-          label: `${weekLabel} WE`,
-          value: Math.round(weekendSeconds / (60 * weekendDaysElapsed))
-        });
-        totalWeekendSeconds += weekendSeconds;
-        totalWeekendDays += weekendDaysElapsed;
+      if (weDays > 0) {
+        const weTotal = Array.from(weCats.values()).reduce((s, v) => s + v, 0);
+        totalWeekendSeconds += weTotal;
+        totalWeekendDays += weDays;
+        if (weCats.size > 0) {
+          for (const [category, totalSec] of weCats) {
+            bars.push({ label: `${weekLabel} WE`, value: Math.round(totalSec / (60 * weDays)), category });
+          }
+        } else {
+          bars.push({ label: `${weekLabel} WE`, value: 0 });
+        }
       }
     }
 
@@ -131,7 +138,7 @@
 
     try {
       const [dateAggs, siteAggs, catAggs] = await Promise.all([
-        GetAggregations(["date"], { start_date: startDate, end_date: endDate }),
+        GetAggregations(["date", "category"], { start_date: startDate, end_date: endDate }),
         GetAggregations(["url", "exe_path"], { start_date: startDate, end_date: endDate }),
         GetAggregations(["category"], { start_date: startDate, end_date: endDate })
       ]);
@@ -164,11 +171,15 @@
     return { hours, minutes };
   });
 
-  let chartAvg = $derived(
-    weeklyResult.bars.length > 0
-      ? weeklyResult.bars.reduce((sum, b) => sum + b.value, 0) / weeklyResult.bars.length
-      : 0
-  );
+  let chartAvg = $derived.by(() => {
+    if (weeklyResult.bars.length === 0) return 0;
+    const totals = new Map<string, number>();
+    for (const bar of weeklyResult.bars) {
+      totals.set(bar.label, (totals.get(bar.label) || 0) + bar.value);
+    }
+    const vals = Array.from(totals.values());
+    return vals.reduce((s, v) => s + v, 0) / vals.length;
+  });
 </script>
 
 <div class="content-card">
@@ -200,22 +211,7 @@
 </div>
 
 {#if !isLoading && siteAggregations.length > 0}
-  <div class="section-wrapper">
-    <div class="list-header">
-      <h2 class="section-heading">Top (Past 4 Weeks)</h2>
-      <div class="list-tabs">
-        <button class="list-tab" class:active={activeListTab === "sites"} onclick={() => activeListTab = "sites"}>Sites & Apps</button>
-        <button class="list-tab" class:active={activeListTab === "categories"} onclick={() => activeListTab = "categories"}>Categories</button>
-      </div>
-    </div>
-    <div class="content-card">
-      {#if activeListTab === "sites"}
-        <TopSitesList aggregations={siteAggregations} />
-      {:else}
-        <TopCategoriesList aggregations={categoryAggregations} />
-      {/if}
-    </div>
-  </div>
+  <TopListSection heading="Top (Past 4 Weeks)" {siteAggregations} {categoryAggregations} />
 {/if}
 
 <style>
@@ -229,37 +225,4 @@
     flex-direction: column;
   }
 
-  .list-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.3rem;
-  }
-
-  .list-tabs {
-    display: flex;
-    gap: 0;
-    border-bottom: 1px solid var(--border-color);
-  }
-
-  .list-tab {
-    font-size: 0.8rem;
-    font-weight: 500;
-    padding: 0.35rem 0.85rem;
-    border: none;
-    background: transparent;
-    color: var(--text-tertiary);
-    cursor: pointer;
-    transition: color 0.15s ease, box-shadow 0.15s ease;
-  }
-
-  .list-tab:hover {
-    color: var(--text-secondary);
-  }
-
-  .list-tab.active {
-    color: var(--accent-color);
-    font-weight: 600;
-    box-shadow: inset 0 -2px 0 var(--accent-color);
-  }
 </style>

@@ -1,31 +1,28 @@
 <script lang="ts">
-  type Aggregation = {
-    groupers: Record<string, any>;
-    duration: number;
-  };
+  import type { Aggregation } from "$lib/utils";
+  import { formatDuration } from "$lib/utils";
 
   let { aggregations }: { aggregations: Aggregation[] } = $props();
 
-  // Sum durations per category and sort descending
+  // Sum durations per category and sort descending; uncategorized items grouped as "Other" at the end
   let categories = $derived.by(() => {
     const catMap = new Map<string, number>();
+    let otherDuration = 0;
     for (const agg of aggregations) {
       const category = agg.groupers.category as string;
       if (category && category !== "Other") {
         catMap.set(category, (catMap.get(category) || 0) + agg.duration);
+      } else {
+        otherDuration += agg.duration;
       }
     }
-    return Array.from(catMap.entries())
-      .map(([name, duration]) => ({ name, duration }))
-      .sort((a, b) => b.duration - a.duration);
+    const sorted = Array.from(catMap.entries())
+      .map(([name, duration]) => ({ name, duration, isOther: false }));
+    if (otherDuration > 0) {
+      sorted.push({ name: "Other", duration: otherDuration, isOther: true });
+    }
+    return sorted.sort((a, b) => b.duration - a.duration);
   });
-
-  function formatDuration(seconds: number): string {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m`;
-  }
 
   let maxDuration = $derived(categories.length > 0 ? categories[0].duration : 1);
 </script>

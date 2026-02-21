@@ -1,25 +1,14 @@
 <script lang="ts">
   import BarChart from "$lib/BarChart.svelte";
-  import TopSitesList from "$lib/TopSitesList.svelte";
-  import TopCategoriesList from "$lib/TopCategoriesList.svelte";
+  import TopListSection from "$lib/TopListSection.svelte";
   import { GetAggregations } from "../../../wailsjs/go/main/App.js";
   import { onMount } from "svelte";
-
-  type Aggregation = {
-    groupers: Record<string, any>;
-    duration: number;
-  };
-
-  type DataPoint = {
-    label: string;
-    value: number;
-  };
+  import type { Aggregation, DataPoint } from "$lib/utils";
 
   let dateAggregations: Aggregation[] = $state([]);
   let siteAggregations: Aggregation[] = $state([]);
   let categoryAggregations: Aggregation[] = $state([]);
   let isLoading = $state(true);
-  let activeListTab: "sites" | "categories" = $state("sites");
   let daysElapsed = $state(7);
   let weekOverWeekChange = $state<number | null>(null);
 
@@ -27,7 +16,7 @@
     await fetchWeekData();
   });
 
-  // Transform for BarChart: date aggregations to daily DataPoints
+  // Transform for BarChart: one DataPoint per (date × category) for stacked rendering
   function transformDaily(aggregations: Aggregation[]): DataPoint[] {
     const today = new Date();
     const dayOfWeek = today.getDay();
@@ -42,16 +31,30 @@
       dateIds.push(date.getFullYear() * 10000 + (date.getMonth() + 1) * 100 + date.getDate());
     }
 
-    const durationMap = new Map<number, number>();
+    // dateId -> category -> seconds
+    const dateMap = new Map<number, Map<string, number>>();
     for (const agg of aggregations) {
-      durationMap.set(agg.groupers.date as number, agg.duration);
+      const dateId = agg.groupers.date as number;
+      const category = (agg.groupers.category as string) || "Other";
+      if (!dateMap.has(dateId)) dateMap.set(dateId, new Map());
+      const catMap = dateMap.get(dateId)!;
+      catMap.set(category, (catMap.get(category) || 0) + agg.duration);
     }
 
     const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    return dateIds.map((dateId, index) => ({
-      label: dayLabels[index],
-      value: Math.round((durationMap.get(dateId) || 0) / 60)
-    }));
+    const result: DataPoint[] = [];
+    for (let i = 0; i < 7; i++) {
+      const label = dayLabels[i];
+      const catMap = dateMap.get(dateIds[i]);
+      if (catMap && catMap.size > 0) {
+        for (const [category, duration] of catMap) {
+          result.push({ label, value: Math.round(duration / 60), category });
+        }
+      } else {
+        result.push({ label, value: 0 });
+      }
+    }
+    return result;
   }
 
   async function fetchWeekData() {
@@ -91,7 +94,7 @@
 
     try {
       const [dateAggs, siteAggs, catAggs, lastWeekAggs] = await Promise.all([
-        GetAggregations(["date"], { start_date: startDate, end_date: endDate }),
+        GetAggregations(["date", "category"], { start_date: startDate, end_date: endDate }),
         GetAggregations(["url", "exe_path"], { start_date: startDate, end_date: endDate }),
         GetAggregations(["category"], { start_date: startDate, end_date: endDate }),
         GetAggregations(["date"], { start_date: lastWeekStartDate, end_date: lastWeekEndDate })
@@ -167,22 +170,7 @@
 </div>
 
 {#if !isLoading && siteAggregations.length > 0}
-  <div class="section-wrapper">
-    <div class="list-header">
-      <h2 class="section-heading">Top This Week</h2>
-      <div class="list-tabs">
-        <button class="list-tab" class:active={activeListTab === "sites"} onclick={() => activeListTab = "sites"}>Sites & Apps</button>
-        <button class="list-tab" class:active={activeListTab === "categories"} onclick={() => activeListTab = "categories"}>Categories</button>
-      </div>
-    </div>
-    <div class="content-card">
-      {#if activeListTab === "sites"}
-        <TopSitesList aggregations={siteAggregations} />
-      {:else}
-        <TopCategoriesList aggregations={categoryAggregations} />
-      {/if}
-    </div>
-  </div>
+  <TopListSection heading="Top This Week" {siteAggregations} {categoryAggregations} />
 {/if}
 
 <style>
@@ -204,37 +192,4 @@
     background: rgba(220, 38, 38, 0.1);
   }
 
-  .list-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.3rem;
-  }
-
-  .list-tabs {
-    display: flex;
-    gap: 0;
-    border-bottom: 1px solid var(--border-color);
-  }
-
-  .list-tab {
-    font-size: 0.8rem;
-    font-weight: 500;
-    padding: 0.35rem 0.85rem;
-    border: none;
-    background: transparent;
-    color: var(--text-tertiary);
-    cursor: pointer;
-    transition: color 0.15s ease, box-shadow 0.15s ease;
-  }
-
-  .list-tab:hover {
-    color: var(--text-secondary);
-  }
-
-  .list-tab.active {
-    color: var(--accent-color);
-    font-weight: 600;
-    box-shadow: inset 0 -2px 0 var(--accent-color);
-  }
 </style>
